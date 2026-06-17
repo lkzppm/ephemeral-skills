@@ -1,36 +1,91 @@
 # CLAUDE.md
 
-Thin index. Read the spec before implementing; do not duplicate it here.
+Thin router into the spec ecosystem. Read the relevant spec before implementing;
+don't duplicate it here.
 
 ## What this repo is
 
 Reference implementation + RFC for `clear_skill_uses`: selective, cache-aware
-eviction of a skill's `SKILL.md` body from agent context after it's been used.
-The skill analogue of `clear_tool_uses_20250919`.
+eviction of a skill's `SKILL.md` body from agent context after it's been used —
+the skill analogue of `clear_tool_uses_20250919`. Two layers: **A** = a
+client-side transform in an Agent SDK loop (built here, `src/clearSkillUses.ts`);
+**B** = a native harness strategy (RFC only). See
+[spec/overview.md](spec/overview.md).
 
-## Specs (source of truth)
+## Stack
 
-- `PRD.md` — requirements, design, API/frontmatter shape, edge cases, milestones,
-  testing strategy. **Start here.**
-- `docs/cost-model.md` — the prefix-cache economics; the eviction trigger policy
-  (`ρ·s·M > ω·X`). The decision rule any automatic trigger must honor.
-- `PR_BODY.md` — upstream framing and prior-art citations. Don't drift the design
-  from what's promised here.
-- `src/clearSkillUses.ts` — the typed contract to implement against.
+TypeScript 5 (ESM, strict) · Vitest · `tsc --noEmit` · `@anthropic-ai/sdk`
+**at the edges only** (the core transform is pure and provider-agnostic).
 
-## Implementation rules
+## Runtime shape
 
-- Keep the core transform a **pure function**: `(messages, opts) → { messages,
-  applied_edits }`. No network, no SDK coupling in the core. Harness-agnostic.
-- Identify skill blocks by `invocation_id` from the side-table, never by content
-  hashing.
-- Cache-correctness is a hard requirement: breakpoint after the stable prefix `P`;
-  one write pass on reprocess (`ω·X`, not `(1+ω)·X`); emit `tokens_freed` /
-  `tokens_reprocessed`.
-- Default `ephemeral: false`. Never auto-evict behavioral/persona skills.
-- Auto-compaction must not resurrect an intentionally evicted skill (see PRD §9).
+```
+Agent SDK loop (edges: instances + requests)
+  ├─ on skill injection: sentinel-wrap body + record { invocationId, … } in side-table
+  └─ before each send:
+       clearSkillUses(messages, sideTable, opts) → { messages, appliedEdits }   ← PURE CORE
+       └─ place cache breakpoint after stable prefix P → POST /v1/messages
+```
+
+## Spec index
+
+| Spec | Read when… |
+|---|---|
+| [spec/overview.md](spec/overview.md) | Orienting; the two layers; the transform pipeline |
+| [spec/project/architecture.md](spec/project/architecture.md) | Layers; pure-core/SDK-at-edges contract; why TS; milestone order |
+| [spec/project/stack.md](spec/project/stack.md) | Toolchain, scripts, deps, the SDK dependency boundary |
+| [spec/project/testing.md](spec/project/testing.md) | Test strategy across milestones |
+| [spec/concepts/skill-identification.md](spec/concepts/skill-identification.md) | Locating a skill block; the `invocationId` side-table; edge cases |
+| [spec/concepts/placeholder-stub.md](spec/concepts/placeholder-stub.md) | The stub; why keep the record; keep-tokens budget |
+| [spec/concepts/eviction-triggers.md](spec/concepts/eviction-triggers.md) | The three triggers; explicit `target` vs policy gate |
+| [spec/concepts/cache-correctness.md](spec/concepts/cache-correctness.md) | Breakpoint after `P`; one write pass `ω·X`; `appliedEdits` |
+
+Full router with token budgets: [spec/INDEX.md](spec/INDEX.md). Source-of-truth
+artifacts: [PRD.md](PRD.md), [docs/cost-model.md](docs/cost-model.md),
+[PR_BODY.md](PR_BODY.md). Per-milestone work: [spec/tasks/](spec/tasks/).
+
+## Response style
+
+- **Code requests** (implement, fix, refactor, add): reply with a 1–3 line
+  briefing — what changed and which files. No diff dumps, no task restatement.
+- **Explanations / chat** ("why", "how does", "what do you think"): reply
+  normally, as verbose as needed.
+- Default to brief.
+
+## When to use the spec
+
+**Use it for:** new code following a non-obvious convention spread across files;
+tracing how the transform/loop fits together; "where does X live"; anything
+touching cache-correctness, the side-table, or the triggers.
+
+**Skip it for:** single-file additive edits you can already locate; typo/format
+fixes. Just `Read` the file and `Edit`.
+
+## Implementation rules (load-bearing)
+
+- **Core is a pure function** — `(messages, sideTable, opts) → { messages,
+  appliedEdits }`. No network, no SDK coupling, no input mutation.
+  Harness-agnostic. See [architecture](spec/project/architecture.md).
+- **Identify skill blocks by `invocationId`** from the side-table, never by
+  content hashing. See [skill-identification](spec/concepts/skill-identification.md).
+- **Cache-correctness is hard-required** — breakpoint after the stable prefix
+  `P`; one write pass on reprocess (`ω·X`, not `(1+ω)·X`); emit
+  `tokensFreed` / `tokensReprocessed`. See
+  [cache-correctness](spec/concepts/cache-correctness.md).
+- **Default `ephemeral: false`** — never policy-evict behavioral/persona skills.
+- **Auto-compaction must not resurrect an evicted skill** — honor the `evicted`
+  flag (PRD §9).
 
 ## Milestone order
 
-M1 pure transform + unit tests → M2 frontmatter + triggers → M3 empirical cost
-harness → M4 RFC/PR. Don't start M2 until M1 tests are green.
+`M1 → M2 → M3 → M4`, gated. **Don't start M2 until M1 tests are green.**
+M1 = pure transform + unit tests; M2 = frontmatter + triggers + loop;
+M3 = empirical cost harness; M4 = RFC/PR. Specs in [spec/tasks/](spec/tasks/).
+
+## Refreshing the spec
+
+Specs are maintained manually. To refresh a stale one, diff it against the code
+and rewrite the drifted sections; keep the spec-index tables here and in
+[spec/INDEX.md](spec/INDEX.md) in sync when files are added or removed. Concept
+docs carry `anchors:` (code symbols) and `updated:` — update both when the
+underlying code moves.
