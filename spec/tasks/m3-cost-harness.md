@@ -1,7 +1,7 @@
 ---
 milestone:
   id: M3
-  state: Todo
+  state: In Progress
   blockedBy: [M2]
 title: "M3 — Empirical cost harness"
 name: m3-cost-harness

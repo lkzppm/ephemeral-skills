@@ -1,7 +1,7 @@
 ---
 milestone:
   id: M2
-  state: Blocked
+  state: Done
   blockedBy: [M1]
 title: "M2 — Frontmatter + triggers"
 name: m2-frontmatter-triggers

@@ -1,7 +1,7 @@
 ---
 milestone:
   id: M1
-  state: In Progress
+  state: Done
   blocks: [M2, M3, M4]
   gate: "npm test green"
 title: "M1 — Pure transform + unit tests"
