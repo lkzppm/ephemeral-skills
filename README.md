@@ -1,0 +1,57 @@
+# ephemeral-skills
+
+**Selective, cache-aware eviction of a skill's `SKILL.md` body from an agent's context once the skill is no longer needed — while preserving file reads, tool results, and conversation history.**
+
+Today, when a skill is invoked in Claude Code, its rendered `SKILL.md` enters the
+conversation as a single message and **stays there for the rest of the session**.
+A "knowledge-delivery" skill (e.g. `/backend-knowledge` that explains how to
+implement something) keeps paying a recurring token cost and dilutes attention
+long after its instructions have been consumed.
+
+The only existing relief is auto-compaction, which is **budget-driven and lossy**
+(it re-attaches the first ~5k tokens of recent skills under a 25k combined budget)
+— not a deliberate, surgical, single-skill eviction.
+
+This repo is:
+
+1. A **reference implementation** (Agent SDK, TypeScript) of a `clear_skill_uses`
+   context-management strategy — the skill analogue of the existing
+   `clear_tool_uses_20250919` context edit.
+2. A **cost model** proving when eviction is a net token win (and when it isn't),
+   so eviction is triggered deliberately rather than blindly.
+3. An **RFC / PR draft** to `anthropics/claude-code` proposing this as a
+   first-class harness feature.
+
+## The one-line cost result
+
+Evicting a skill of `s` tokens that would otherwise persist for `M` more requests,
+at the price of reprocessing a "lived band" of `X` tokens, is a net win iff:
+
+```
+ρ·s·M  >  ω·X        ⟺        s·M  >  (ω/ρ)·X
+```
+
+with cache-read `ρ ≈ 0.1` and cache-write `ω ≈ 1.25` (5-min TTL) / `2.0` (1-hr).
+So the hurdle is `s·M > ~12.5·X`: evict **fat, long-lived** skills with a **small
+lived band**, and evict **as early as possible** (X grows the longer you wait).
+
+Full derivation: [`docs/cost-model.md`](docs/cost-model.md).
+
+## Status
+
+Proof-of-concept / RFC. The reference implementation runs on the Claude Agent SDK
+(same harness that powers Claude Code, exposed as a library). It is **not** a patch
+to the interactive `claude` binary — see PRD §"Delivery surfaces" for why.
+
+## Prior art / related issues
+
+- [#21583](https://github.com/anthropics/claude-code/issues/21583) — *Remove skills from context when not in use* (the canonical request; currently stale). This repo is its reference implementation.
+- [#39749](https://github.com/anthropics/claude-code/issues/39749) — Skill activation/deactivation per session (load-time cousin).
+- [#45091](https://github.com/anthropics/claude-code/issues/45091) — Clear context *before* skill execution (coarse, wrong boundary).
+- [#35150](https://github.com/anthropics/claude-code/issues/35150) — Programmatic clear + continuation injection.
+- [#17283](https://github.com/anthropics/claude-code/issues/17283) — `context: fork` ignored on Skill-tool invocation.
+- Anthropic API — [`clear_tool_uses_20250919`](https://platform.claude.com/docs/en/build-with-claude/context-editing) context editing (the machinery this extends).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
