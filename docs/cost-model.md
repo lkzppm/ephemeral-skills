@@ -103,8 +103,8 @@ exactly this reason.
 
 ## Empirical validation (M3)
 
-The harness in `tests/` (to be built) drives a real Agent SDK loop with prompt
-caching on and records `usage.cache_read_input_tokens` and
+The harness (`examples/costHarness.ts`, run via `npm run harness`) drives a real
+Agent SDK loop with prompt caching on and records `usage.cache_read_input_tokens` and
 `usage.cache_creation_input_tokens` per step, before and after eviction, to confirm:
 
 - per-tail-step `cache_read` drops by ≈ `ρ·s`,
