@@ -29,12 +29,15 @@ In:
   `evict-keep-tokens` from SKILL.md frontmatter into `SkillRecord` defaults.
 - Implement `estimateTail` (default: `remainingTokenBudget / avgStepTokens`,
   pluggable).
+- The **`clear_skill` model tool** (first-class): a tool definition + handler that
+  resolves a skill name to its `invocationId` and calls `clearSkillUses` with
+  `target` (never `force`).
 - Wire `evict-after: used` (evict at first request after output is consumed) and
   the automatic token-threshold trigger into a reference loop that calls
   `clearSkillUses` before each send and places the cache breakpoint after `P`.
+- Enforce the strict `ephemeral` gate (`force` only via the human `--force` path).
 
 Out:
-- The model-invocable `evict_skill` tool (optional; can defer).
 - Empirical cost validation (M3).
 
 ## Acceptance Criteria

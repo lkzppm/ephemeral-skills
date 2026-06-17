@@ -8,9 +8,10 @@ don't duplicate it here.
 Reference implementation + RFC for `clear_skill_uses`: selective, cache-aware
 eviction of a skill's `SKILL.md` body from agent context after it's been used —
 the skill analogue of `clear_tool_uses_20250919`. Two layers: **A** = a
-client-side transform in an Agent SDK loop (built here, `src/clearSkillUses.ts`);
-**B** = a native harness strategy (RFC only). See
-[spec/overview.md](spec/overview.md).
+client-side transform in an Agent SDK loop (built here — pure core
+`src/clearSkillUses.ts`, the SDK loop, the `clear_skill` tool, and a `npm start`
+CLI); **B** = a native harness strategy (RFC only). Skills are their own content
+category, never `tool_results`. See [spec/overview.md](spec/overview.md).
 
 ## Stack
 
@@ -20,11 +21,13 @@ TypeScript 5 (ESM, strict) · Vitest · `tsc --noEmit` · `@anthropic-ai/sdk`
 ## Runtime shape
 
 ```
-Agent SDK loop (edges: instances + requests)
-  ├─ on skill injection: sentinel-wrap body + record { invocationId, … } in side-table
+Agent SDK loop (edges: instances + requests + clear_skill tool)
+  ├─ on skill injection: inject { type:"skill", … } block (sentinel-wrapped) + record in side-table
+  ├─ triggers: frontmatter evict-after · clear_skill (model) · threshold · /clear-skill (human)
   └─ before each send:
-       clearSkillUses(messages, sideTable, opts) → { messages, appliedEdits }   ← PURE CORE
-       └─ place cache breakpoint after stable prefix P → POST /v1/messages
+       clearSkillUses(messages, sideTable, opts) → { messages, sideTable, appliedEdits }   ← PURE CORE
+       │  (ephemeral:false never evicted unless opts.force)
+       └─ place cache breakpoint after stable prefix P → POST /v1/messages → record usage
 ```
 
 ## Spec index
@@ -37,8 +40,9 @@ Agent SDK loop (edges: instances + requests)
 | [spec/project/testing.md](spec/project/testing.md) | Test strategy across milestones |
 | [spec/concepts/skill-identification.md](spec/concepts/skill-identification.md) | Locating a skill block; the `invocationId` side-table; edge cases |
 | [spec/concepts/placeholder-stub.md](spec/concepts/placeholder-stub.md) | The stub; why keep the record; keep-tokens budget |
-| [spec/concepts/eviction-triggers.md](spec/concepts/eviction-triggers.md) | The three triggers; explicit `target` vs policy gate |
+| [spec/concepts/eviction-triggers.md](spec/concepts/eviction-triggers.md) | The three triggers + the `clear_skill` tool; the strict `ephemeral` gate; `target` vs policy |
 | [spec/concepts/cache-correctness.md](spec/concepts/cache-correctness.md) | Breakpoint after `P`; one write pass `ω·X`; `appliedEdits` |
+| [spec/concepts/showcase-cli.md](spec/concepts/showcase-cli.md) | The `npm start` REPL demo; slash commands; the cache-usage panel |
 
 Full router with token budgets: [spec/INDEX.md](spec/INDEX.md). Source-of-truth
 artifacts: [PRD.md](PRD.md), [docs/cost-model.md](docs/cost-model.md),
@@ -72,7 +76,10 @@ fixes. Just `Read` the file and `Edit`.
   `P`; one write pass on reprocess (`ω·X`, not `(1+ω)·X`); emit
   `tokensFreed` / `tokensReprocessed`. See
   [cache-correctness](spec/concepts/cache-correctness.md).
-- **Default `ephemeral: false`** — never policy-evict behavioral/persona skills.
+- **Strict `ephemeral` gate** — `ephemeral: false` (the default) is never evicted
+  by policy, by the `clear_skill` model tool, or by an explicit `target`; only a
+  deliberate human `--force` overrides. Never silently drop behavioral/persona
+  skills. (Resolves PRD §12.)
 - **Auto-compaction must not resurrect an evicted skill** — honor the `evicted`
   flag (PRD §9).
 

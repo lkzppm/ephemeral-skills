@@ -71,8 +71,12 @@ evict-keep-tokens: 30      # placeholder budget
 ```
 
 Plus, ideally, a `clear_skill_uses` strategy under the existing
-`context-management-2025-06-27` beta for API symmetry, and an optional
-model-invocable `evict_skill(name)` for model-decided drops (gated).
+`context-management-2025-06-27` beta for API symmetry, and a first-class
+model-invocable `clear_skill(name)` for model-decided drops. Eviction is governed
+by a strict `ephemeral` gate: `ephemeral: false` skills (the default — personas,
+guardrails) are never droppable by policy or by the model, only by an explicit
+human override — so the model can prune its own scratch knowledge without ever
+being able to forget its instructions.
 
 Eviction leaves a stub ("skill X was invoked; re-invoke to reload"), marks the
 skill so auto-compaction won't resurrect it, and returns an `applied_edits`-style

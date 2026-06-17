@@ -17,7 +17,9 @@ related:
 
 ## What it does
 
-On eviction the skill body is replaced with a compact stub, e.g.:
+On eviction the skill body is replaced with a compact stub. The block stays a
+skill record — `{ type: "skill", skill_name, body: <stub>, evicted: true }` — so
+the prefix above it is untouched and the model still sees that the skill ran:
 
 ```
 [skill "backend-knowledge" was invoked earlier and has been evicted to free
