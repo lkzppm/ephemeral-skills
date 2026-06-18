@@ -403,7 +403,7 @@ function VisualLineView({ line, width }: { line: VisualLine; width: number }) {
         <Text>
           {highlightRuns(padded, commandHighlightSet(padded), 0, padded.length, {
             background: "gray",
-            base: "whiteBright",
+            base: "#ffffff",
           })}
         </Text>
       );
