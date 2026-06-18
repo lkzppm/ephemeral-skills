@@ -83,7 +83,7 @@ npm run harness            # default 6 tail turns;  TAIL=12 npm run harness
 | `src/frontmatter.ts`, `src/skillLoader.ts` | parse SKILL.md frontmatter, load skills |
 | `src/tools/clearSkill.ts` | the model-invocable `clear_skill` tool |
 | `src/loop.ts` | `SkillAgent` — the SDK loop (injection, triggers, cache breakpoint, usage) |
-| `examples/cli.ts` · `examples/costHarness.ts` | the `npm start` REPL · the `npm run harness` |
+| `examples/cli.tsx` · `examples/costHarness.ts` | the `npm start` Ink TUI · the `npm run harness` |
 | `skills/` | sample skills (2 ephemeral, 1 persona) |
 | `spec/` · [`CLAUDE.md`](CLAUDE.md) | spec ecosystem · contributor / agent router |
 
