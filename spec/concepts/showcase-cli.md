@@ -66,5 +66,10 @@ After each request the CLI prints `usage.cache_read_input_tokens` and
 
 ## Requirements
 
-Needs `ANTHROPIC_API_KEY` in the environment (you supply your own). Run with
-`npm start`. No key is needed to read or typecheck the code.
+Needs an Anthropic credential for `send()` — put `ANTHROPIC_API_KEY` in a `.env`
+file (copy `.env.example`; the CLI auto-loads it via `dotenv`) or the environment.
+A Claude Pro/Max subscription or `claude -p` **cannot** be used: the loop drives
+the raw Messages API to control cache breakpoints and read per-request cache usage,
+which the subscription / CLI don't expose. A gateway bearer token works instead
+(`ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL`). No credential is needed for
+`/skills`, `/use`, `/clear-skill`, `/context`, or to typecheck.

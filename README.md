@@ -41,8 +41,13 @@ Full derivation: [`docs/cost-model.md`](docs/cost-model.md).
 
 ```bash
 npm install
-export ANTHROPIC_API_KEY=sk-...   # needed only for the live CLI / harness
+cp .env.example .env   # then add your ANTHROPIC_API_KEY (only the live CLI / harness need it)
 ```
+
+The CLI and harness auto-load `.env`. A Claude Pro/Max subscription or `claude -p`
+**can't** drive this loop — it needs the raw Messages API (manual `cache_control` +
+per-request cache usage), which the subscription/CLI don't expose. To front it with
+a gateway, set `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` in `.env` instead.
 
 **Demo REPL** — inject a skill, use it, evict it, watch the per-turn cache panel:
 
