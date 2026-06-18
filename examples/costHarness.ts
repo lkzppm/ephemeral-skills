@@ -16,6 +16,7 @@
  * Requires real API access; makes ~9 requests by default (2 use + 6 tail + overhead).
  */
 
+import "dotenv/config";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";

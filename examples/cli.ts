@@ -4,10 +4,12 @@
  * Demonstrates deterministic skill injection, manual eviction, and the
  * cache-usage panel that makes the cost savings of eviction legible.
  *
- * Run with:  tsx examples/cli.ts
- * Requires:  ANTHROPIC_API_KEY in env for agent.send(); slash commands work without it.
+ * Run with:  npm start   (or: tsx examples/cli.ts)
+ * Requires:  ANTHROPIC_API_KEY for agent.send() — put it in .env (auto-loaded) or
+ *            the environment. Slash commands other than a turn work without it.
  */
 
+import "dotenv/config";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { fileURLToPath } from "node:url";
