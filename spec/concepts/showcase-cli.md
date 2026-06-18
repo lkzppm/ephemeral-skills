@@ -1,10 +1,10 @@
 ---
 name: showcase-cli
-description: The reference REPL (npm start) — slash commands that inject and evict skills, deterministic injection for reproducibility, and the live cache-usage panel that makes eviction visible
-tags: [cli, repl, showcase, demo, slash-commands]
-updated: 2026-06-17
+description: The reference TUI (npm start) — an Ink terminal app with a live-stats header, a scrolling chat transcript, and a bottom-pinned autocompleting input; slash commands inject/evict skills, and the cache-usage panel makes eviction visible
+tags: [cli, tui, ink, showcase, demo, slash-commands, autocomplete]
+updated: 2026-06-18
 anchors:
-  - examples/cli.ts
+  - examples/cli.tsx
   - src/loop.ts
   - src/skillLoader.ts
 related:
@@ -17,8 +17,11 @@ related:
 
 ## Location
 
-`examples/cli.ts` (entry: `npm start`), built on `src/loop.ts` and
-`src/skillLoader.ts`.
+`examples/cli.tsx` (entry: `npm start`), built on `src/loop.ts` and
+`src/skillLoader.ts`. It's an [Ink](https://github.com/vadimdemedes/ink) (React
+for the terminal) app; autocomplete comes from `@inkjs/ui`'s `TextInput`
+`suggestions` prop. These three deps (`ink`, `react`, `@inkjs/ui`) live only at
+this showcase edge — the pure core and `src/loop.ts` stay free of them.
 
 ## Purpose
 
@@ -36,21 +39,72 @@ and skill-as-its-own-block injection with stable `invocationId`s. Owning ~200
 legible lines is worth more for an RFC than burying the one mechanism under a
 third-party framework.
 
+## Layout & input
+
+A full-window flexbox column (`useWindowSize` → `width`/`height`), rendered into
+the alternate screen buffer so it doesn't pollute scrollback:
+
+- **Header** (top, fixed, blue): spans the full terminal width
+  (`width={columns}`), with the title `ephemeral_skills` on the left and a live
+  stats line on the right (`justifyContent:"space-between"`) — `skills
+  active/total`, estimated context tokens, last `cache_read` / `cache_creation`,
+  total tokens freed. Recomputed from `agent.contextStats()` + `agent.usageLog`
+  after every action, and streamed mid-turn via the agent's `onUsage` callback.
+- **Transcript** (middle): user (white on a full-width gray block with a `»`
+  prefix, padded to the content width, Claude-Code style) / assistant (green) /
+  system & command responses (cyan) / usage (dim) lines, one blank line between
+  each (`gap={1}`), newest at the bottom. It is the **only flexible region**
+  (`flexGrow={1}` + `overflow:"hidden"`); the header and the whole bottom region
+  are pinned with `flexShrink={0}` so they never shrink or scroll off when
+  content overflows. The viewport height is read with `measureElement`, and only
+  the most-recent entries that fit are rendered, so the frame never exceeds the
+  terminal and nothing distorts. Internally the transcript is flattened to styled
+  rows (each entry wrapped to the content width, blank line between entries) and a
+  window is shown. **`Shift+↑` / `Shift+↓` scroll** one row (`PageUp` / `PageDn`
+  by a page); **`Esc` jumps back to the newest message** when scrolled; a new
+  message auto-follows back to the bottom. While scrolled, the one-row spacer
+  above the input shows `▲ N lines up — Shift+↑/↓ scroll · Esc to newest`.
+  (Shift+Enter isn't used: most terminals send it identically to Enter, so it
+  can't be detected.)
+- **Input** (bottom, fixed): a small controlled input built on Ink's `useInput`
+  (not `@inkjs/ui`'s `TextInput`, which can't do `Tab` or mid-sentence tokens).
+  Autocomplete triggers on the `/token` **under the cursor — anywhere in the
+  line**, so a skill can be referenced mid-sentence; `/use` / `/clear-skill`
+  additionally complete a skill-name argument. `↑`/`↓` move the cyan suggestion
+  menu; **`Tab` writes** the highlighted completion (with an inline ghost
+  preview); **`Enter` writes _and_ sends** it — except for a command still
+  awaiting an argument (`/use` / `/clear-skill`), which only writes. With no open
+  menu, `Enter` just sends the line, and **`↑`/`↓` recall submitted-input
+  history** (shell-style; editing or submitting resets the position). The guidance hint shows only while the input
+  is empty; once typing starts it's replaced by the live menu (and nothing when
+  there's no match — no "no matching command" noise). A turn in flight swaps the
+  input for a spinner.
+- **`/skills` picker** (bottom, modal): a self-contained `useInput` menu —
+  `↑`/`↓` navigate, `Enter` injects the highlighted skill, `Esc` cancels. While
+  open it owns the keyboard (the App-level handler is `isActive:false`).
+- **Quit**: `Esc Esc` when already at the newest message (press twice within
+  ~1.5s — the first shows a prompt; if scrolled, that first `Esc` returns to the
+  newest message instead), or `Ctrl+C` / `Ctrl+D`, or `/quit`.
+
+Non-interactive stdio (no TTY — CI, piped smoke tests) skips Ink and prints a
+plain banner + skill table instead, so `npm start </dev/null` never crashes.
+
 ## Slash commands
 
 | Command | Effect |
 |---|---|
-| `/skills` | list skills discovered under `skills/` (name, `ephemeral`, token size) |
+| `/skills` | open the interactive skill picker (↑/↓ navigate, Enter injects, Esc cancels) |
 | `/<name>` or `/use <name>` | inject that skill's `SKILL.md` body (deterministic — the human controls when `s` enters context, for reproducibility) |
 | `/clear-skill <name>` | evict it now; honors the strict `ephemeral` gate |
 | `/clear-skill <name> --force` | human override — evict even an `ephemeral: false` skill |
 | `/usage` | print the per-turn cache panel (`cache_read`, `cache_creation`, freed / reprocessed) |
 | `/context` | dump current message count + estimated tokens per block |
-| `/help`, `/quit` | — |
+| `/help`, `/quit` | — (also quit via `Esc Esc`, `Ctrl+C`, `Ctrl+D`) |
 
-Any non-slash input is a normal user turn that drives the agentic loop. The model
-can also evict on its own via the `clear_skill` tool (see
-[eviction-triggers](eviction-triggers.md)).
+Any non-slash input is a normal user turn that drives the agentic loop. A
+`/skill-name` mentioned inside that turn is injected for the turn (mention →
+inject), so skills can be invoked mid-sentence. The model can also evict on its
+own via the `clear_skill` tool (see [eviction-triggers](eviction-triggers.md)).
 
 ## The payoff: the usage panel
 

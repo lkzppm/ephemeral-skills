@@ -33,7 +33,7 @@ The motivating gap is upstream issue **#21583**. Full requirements live in
 
 ## Reference CLI showcase (`npm start`)
 
-A local REPL (`examples/cli.ts`) that mimics the Claude Code surface to make the
+A local Ink TUI (`examples/cli.tsx`) that mimics the Claude Code surface to make the
 mechanism visible: load skills from `skills/`, inject one with `/<name>`, do work,
 then evict via `/clear-skill`, the model's `clear_skill` tool, or an automatic
 trigger — and watch the per-turn `cache_read` / `cache_creation` panel show the
