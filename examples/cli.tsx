@@ -161,6 +161,26 @@ function describeItem(item: string): string {
   return "";
 }
 
+/** Is `tok` an exact, recognized slash command or /skill-name? */
+function isCommandToken(tok: string): boolean {
+  if (!tok.startsWith("/")) return false;
+  const name = tok.slice(1);
+  return KNOWN_COMMANDS.has(name) || skillNames.includes(name);
+}
+
+/** Character indices in `value` covered by a recognized /command token. */
+function commandHighlightSet(value: string): Set<number> {
+  const set = new Set<number>();
+  const re = /[^ \t]+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(value)) !== null) {
+    if (isCommandToken(m[0])) {
+      for (let i = m.index; i < m.index + m[0].length; i++) set.add(i);
+    }
+  }
+  return set;
+}
+
 const ASSIST_PREFIX = "assistant ⟩ ";
 
 /** Plain text an entry renders as (before wrapping). */
@@ -346,15 +366,47 @@ function Header({ stats, width }: { stats: Stats; width: number }) {
   );
 }
 
+/** Slice `text[from,to)` into contiguous <Text> runs — recognized /command
+ *  ranges (per `cyan`) rendered in cyan, the rest in `base`, over `background`. */
+function highlightRuns(
+  text: string,
+  cyan: Set<number>,
+  from: number,
+  to: number,
+  opts?: { background?: string; base?: string },
+): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let i = from;
+  while (i < to) {
+    const on = cyan.has(i);
+    let j = i;
+    while (j < to && cyan.has(j) === on) j++;
+    out.push(
+      <Text key={i} backgroundColor={opts?.background} color={on ? "cyan" : opts?.base}>
+        {text.slice(i, j)}
+      </Text>,
+    );
+    i = j;
+  }
+  return out;
+}
+
 function VisualLineView({ line, width }: { line: VisualLine; width: number }) {
   switch (line.kind) {
     case "gap":
       return <Text> </Text>;
     case "user": {
-      // White on a full-width gray block, padded to the content width.
+      // White on a full-width gray block; recognized /command tokens go cyan.
       const padded =
         line.text.length < width ? line.text + " ".repeat(width - line.text.length) : line.text;
-      return <Text backgroundColor="gray" color="white">{padded}</Text>;
+      return (
+        <Text>
+          {highlightRuns(padded, commandHighlightSet(padded), 0, padded.length, {
+            background: "gray",
+            base: "whiteBright",
+          })}
+        </Text>
+      );
     }
     case "assistant":
       if (line.first && line.text.startsWith(ASSIST_PREFIX)) {
@@ -536,6 +588,12 @@ function CommandInput({
       ? sel.slice(info.token.length)
       : "";
 
+  // Highlight only recognized /command tokens (anywhere in the line) in cyan;
+  // everything else keeps the default color. `runs` slices [from,to) so the
+  // cursor/ghost overlays still fit between runs.
+  const cyan = useMemo(() => commandHighlightSet(value), [value]);
+  const runs = (from: number, to: number) => highlightRuns(value, cyan, from, to);
+
   let line: React.ReactNode;
   if (value === "") {
     line = (
@@ -549,7 +607,7 @@ function CommandInput({
     line = (
       <Text>
         <Text color="cyan">» </Text>
-        {value}
+        {runs(0, value.length)}
         <Text inverse dimColor>
           {ghost[0]}
         </Text>
@@ -561,9 +619,9 @@ function CommandInput({
     line = (
       <Text>
         <Text color="cyan">» </Text>
-        {value.slice(0, cursor)}
-        <Text inverse>{at}</Text>
-        {value.slice(cursor + 1)}
+        {runs(0, cursor)}
+        <Text inverse color={cyan.has(cursor) ? "cyan" : undefined}>{at}</Text>
+        {runs(cursor + 1, value.length)}
       </Text>
     );
   }
