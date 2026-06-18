@@ -91,7 +91,15 @@ export class SkillAgent {
 
   private getClient(): Anthropic {
     if (!this.client) {
-      this.client = new Anthropic(this.cfg.apiKey ? { apiKey: this.cfg.apiKey } : {});
+      // Auth resolves from config or .env / environment. ANTHROPIC_API_KEY is the
+      // standard path; ANTHROPIC_AUTH_TOKEN (+ ANTHROPIC_BASE_URL) lets you front
+      // the Messages API with a bearer token via a gateway/proxy instead of a key.
+      const opts: { apiKey?: string; authToken?: string; baseURL?: string } = {};
+      const apiKey = this.cfg.apiKey ?? process.env.ANTHROPIC_API_KEY;
+      if (apiKey) opts.apiKey = apiKey;
+      if (process.env.ANTHROPIC_AUTH_TOKEN) opts.authToken = process.env.ANTHROPIC_AUTH_TOKEN;
+      if (process.env.ANTHROPIC_BASE_URL) opts.baseURL = process.env.ANTHROPIC_BASE_URL;
+      this.client = new Anthropic(opts);
     }
     return this.client;
   }
