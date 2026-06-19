@@ -78,6 +78,7 @@ Agent SDK loop (TypeScript, @anthropic-ai/sdk)        ← edges: instances + req
 - The placeholder left behind → [spec/concepts/placeholder-stub.md](concepts/placeholder-stub.md)
 - When eviction fires (frontmatter / clear_skill tool / threshold / manual) + the strict gate → [spec/concepts/eviction-triggers.md](concepts/eviction-triggers.md)
 - Keeping the prefix cache warm + edit accounting → [spec/concepts/cache-correctness.md](concepts/cache-correctness.md)
+- A picture-first walkthrough of the KV-cache re-link (diagrams + usage trace) → [spec/concepts/cache-relinking.md](concepts/cache-relinking.md)
 - The reference CLI demo → [spec/concepts/showcase-cli.md](concepts/showcase-cli.md)
 - The token economics / break-even → [docs/cost-model.md](../docs/cost-model.md)
 - Layers, pure-core contract, language choice → [spec/project/architecture.md](project/architecture.md)
