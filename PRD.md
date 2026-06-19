@@ -58,8 +58,8 @@ Two layers:
   transform over the `messages` array in an Agent SDK loop. Tags each skill block
   on injection, and on trigger rewrites it to a placeholder before the next send.
 - **Layer B — native harness proposal (RFC).** The same selector implemented inside
-  the harness as a `context-management` strategy, plus frontmatter and an optional
-  model-invocable `evict_skill` tool. Specified here, not implemented in this repo.
+  the harness as a `context-management` strategy, plus frontmatter and a first-class
+  model-invocable `clear_skill` tool. Specified here, not implemented in this repo.
 
 ## 4. Identifying a skill block
 
@@ -75,6 +75,14 @@ robustly:
 
 Do **not** identify skills by content hashing alone in production — collisions and
 edits make it brittle. The side-table/metadata approach is normative.
+
+A skill body is its **own content category** — a `{ type: "skill", … }` block (SDK
+path) or first-class harness metadata (native path), **never** a `tool_result`. If
+it were a `tool_result`, `clear_tool_uses_20250919` would own its lifecycle under
+tool-result policy and lose the `ephemeral` flag and the eviction triggers.
+`clear_skill_uses` is therefore **orthogonal** to `clear_tool_uses`, not a special
+case of it. (The body is never folded into `system` either — that prefix is frozen,
+so per-skill mid-array eviction would be impossible.)
 
 ## 5. Placeholder (stub) semantics
 
@@ -92,7 +100,14 @@ needed the body. Stub length is configurable (`evict_keep_tokens`, default ≈ 3
 
 ## 6. Triggers
 
-Support three, composable:
+**The strict `ephemeral` gate governs all of them.** `ephemeral: false` (the
+default) means the skill is resident for the whole session and is **never** evicted
+— not by policy, not by the `clear_skill` tool, not by an explicit `target`. The
+only override is a deliberate human force (`--force`). Once the model can evict its
+own skills, this absolute floor is a safety property: it cannot drop a
+persona / guardrail skill mid-task.
+
+Three composable triggers, all subject to that gate:
 
 1. **Frontmatter, declarative (primary).**
    ```yaml
@@ -102,16 +117,26 @@ Support three, composable:
    ```
    `evict-after: used` = evict at the first request after the skill's output has
    been consumed (recommended — minimizes the lived band X).
-2. **Model-invocable tool (optional).** Expose `evict_skill(name)` so the model can
-   drop a skill when it decides it's done (matches #21583's Blender example).
-   Gate behind `disable-model-invocation`-style opt-in.
+2. **The `clear_skill` model tool (first-class).** Expose `clear_skill(skill_name)`
+   so the model can drop a skill when it decides it's done (matches #21583's Blender
+   example). It resolves the name to its `invocationId` and calls the core with
+   `target`, never `force`; refused on `ephemeral: false`. Gate behind a
+   `disable-model-invocation`-style opt-in.
 3. **Threshold, automatic.** Like `clear_tool_uses`, fire when context crosses a
-   token threshold, evicting ephemeral skills oldest-first. Excludable per skill.
+   token threshold, evicting ephemeral skills oldest-first (cost-gated). Excludable
+   per skill.
+
+A manual surface — `/clear-skill <name>` (and `/clear-skill <name> --force`, the
+human override) — is provided in the reference CLI (§7).
 
 ## 7. Delivery surfaces
 
 - **Agent SDK (TS/Python):** full implementation lands here. The SDK *is* the Claude
   Code harness exposed as a library, so a strategy here is the faithful prototype.
+- **Reference CLI showcase (`npm start`):** a local Ink TUI (`examples/cli.tsx`) over the
+  SDK loop that injects skills via slash commands (with autocomplete) and shows a
+  live header + per-turn cache-usage panel — the legible demo and interactive face of the M3 harness. It is a
+  purpose-built showcase, **not** the production TUI.
 - **Interactive `claude` TUI:** cannot be patched externally (compiled bundle, no
   license to modify/redistribute, re-injects skill state each turn). Native support
   must come from Anthropic — hence the RFC. Do not attempt to monkeypatch the binary.
@@ -132,7 +157,9 @@ The eviction request breaks the cached prefix at the stub. Implementation MUST:
 
 ## 9. Edge cases & interactions
 
-- **Behavioral skills:** never auto-evict; `ephemeral` defaults false.
+- **Behavioral skills:** `ephemeral` defaults false and is a **strict gate** — never
+  evicted by policy, the `clear_skill` tool, or an explicit target; only a deliberate
+  human `--force` overrides (so the model cannot drop its own guardrails).
 - **Compaction interaction (important):** auto-compaction re-attaches recent skills.
   An *intentionally* evicted skill MUST be marked so compaction does **not**
   resurrect it. Add an `evicted` flag to the skill's side-table entry; compaction
@@ -151,8 +178,10 @@ The eviction request breaks the cached prefix at the stub. Implementation MUST:
 - **M1 — SDK transform + unit tests.** `clearSkillUses(messages, opts)` rewrites a
   tagged skill block to a stub, preserves all else, returns `applied_edits`. Pure
   function, no network. (`src/clearSkillUses.ts`, `tests/`)
-- **M2 — Frontmatter + triggers.** Parse `ephemeral`/`evict-after`/`evict-keep-tokens`;
-  wire `evict-after: used` and threshold triggers into an Agent SDK loop.
+- **M2 — Frontmatter + triggers + loop.** Parse `ephemeral`/`evict-after`/
+  `evict-keep-tokens`; the first-class `clear_skill` model tool; wire `evict-after:
+  used` and threshold triggers into an Agent SDK loop; ship the reference CLI
+  (`npm start`).
 - **M3 — Empirical cost harness.** Real API calls with prompt caching on; record
   `usage.cache_read_input_tokens` / `cache_creation_input_tokens` before/after to
   validate `ρ·s·M` vs `ω·X`. Emit a CSV + a break-even plot.
@@ -173,16 +202,25 @@ The eviction request breaks the cached prefix at the stub. Implementation MUST:
 - **Compaction:** force compaction after an eviction; assert the evicted skill is
   **not** re-attached.
 
-## 12. Open questions
+## 12. Decisions & open questions
 
-- Default for `evict-after` when `ephemeral: true` but unspecified — `used` vs a
-  conservative token threshold?
-- Should eviction be primarily deterministic (frontmatter) or model-driven? Lean
-  deterministic; model-driven as opt-in.
-- Integrate as a new `type` under the existing `context-management-2025-06-27` beta,
-  or a separate strategy? (Prefer the former for API symmetry.)
-- How to surface in the interactive TUI eventually — `/evict-skill <name>` slash
-  command vs purely frontmatter-driven?
+**Resolved**
+- **Does an explicit `target` override `ephemeral: false`?** No. `ephemeral` is a
+  strict gate (§6): policy, the `clear_skill` tool, and explicit targets all respect
+  it; only a human `--force` overrides. Rationale: the model must not be able to drop
+  its own persona / guardrail skills.
+- **Deterministic vs model-driven?** Both, composable: frontmatter `evict-after` is
+  primary; the `clear_skill` tool is first-class for model-decided drops; threshold is
+  the automatic backstop.
+- **Manual surface?** A `/clear-skill <name>` slash command (with `--force`) in the
+  reference CLI (§7).
+- **Default `evict-after` when `ephemeral: true` but unspecified** — `used` (minimizes
+  the lived band `X`; see the cost-model timing corollary).
+
+**Open**
+- Integrate as a new `type` under the existing `context-management-2025-06-27` beta, or
+  a separate strategy? (Prefer the former for API symmetry.)
+- The exact native metadata shape for a skill block in Layer B (harness-internal).
 
 ## 13. Reference contract
 

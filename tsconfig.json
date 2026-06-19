@@ -5,8 +5,10 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "esModuleInterop": true,
+    "jsx": "react-jsx",
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "resolveJsonModule": true
   },
-  "include": ["src", "tests"]
+  "include": ["src", "tests", "examples"]
 }

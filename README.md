@@ -37,6 +37,56 @@ lived band**, and evict **as early as possible** (X grows the longer you wait).
 
 Full derivation: [`docs/cost-model.md`](docs/cost-model.md).
 
+## Quickstart
+
+```bash
+npm install
+cp .env.example .env   # then add your ANTHROPIC_API_KEY (only the live CLI / harness need it)
+```
+
+The CLI and harness auto-load `.env`. A Claude Pro/Max subscription or `claude -p`
+**can't** drive this loop — it needs the raw Messages API (manual `cache_control` +
+per-request cache usage), which the subscription/CLI don't expose. To front it with
+a gateway, set `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` in `.env` instead.
+
+**Demo REPL** — inject a skill, use it, evict it, watch the per-turn cache panel:
+
+```
+npm start
+» /skills                            # skills discovered under skills/
+» /backend-knowledge                 # inject a fat (~2.8k tok) skill
+» Explain PUT vs PATCH for my API.   # use it (cache_read now includes the skill)
+» /clear-skill backend-knowledge     # evict it
+» Any follow-up…                     # cache_read is ~ρ·s smaller; one-time spike at the cut
+» /usage                             # the per-turn cache log
+```
+
+`ephemeral` is a **strict gate**: `ephemeral:false` skills (personas, guardrails)
+can't be evicted by policy, by the model's `clear_skill` tool, or by an explicit
+target — only a human `--force`. The model may also call `clear_skill` itself when
+it decides it's done with an ephemeral skill.
+
+**Cost harness** — run the inject → use → evict → tail scenario live, emit a CSV
+plus a predicted-vs-observed summary:
+
+```bash
+npm run harness            # default 6 tail turns;  TAIL=12 npm run harness
+```
+
+**Develop:** `npm run typecheck` (tsc) · `npm test` (vitest — M1 pure-core units).
+
+### Layout
+
+| Path | What |
+|---|---|
+| `src/clearSkillUses.ts` | pure transform + cost gate (M1) |
+| `src/frontmatter.ts`, `src/skillLoader.ts` | parse SKILL.md frontmatter, load skills |
+| `src/tools/clearSkill.ts` | the model-invocable `clear_skill` tool |
+| `src/loop.ts` | `SkillAgent` — the SDK loop (injection, triggers, cache breakpoint, usage) |
+| `examples/cli.tsx` · `examples/costHarness.ts` | the `npm start` Ink TUI · the `npm run harness` |
+| `skills/` | sample skills (2 ephemeral, 1 persona) |
+| `spec/` · [`CLAUDE.md`](CLAUDE.md) | spec ecosystem · contributor / agent router |
+
 ## Status
 
 Proof-of-concept / RFC. The reference implementation runs on the Claude Agent SDK
