@@ -11,7 +11,7 @@
 | [concepts/eviction-triggers.md](concepts/eviction-triggers.md) | The three triggers; explicit `target` vs policy gate; when the cost gate is consulted | 380 |
 | [concepts/cache-correctness.md](concepts/cache-correctness.md) | Breakpoint after `P`; one write pass `ω·X`; `appliedEdits` accounting; the no-mutation rule | 430 |
 | [concepts/cache-relinking.md](concepts/cache-relinking.md) | A picture-first walkthrough of the KV-cache snip-and-rebuild; the per-turn `cache_read`/`cache_creation` trace; for showing the mechanism visually | 560 |
-| [concepts/showcase-cli.md](concepts/showcase-cli.md) | The `npm start` REPL demo; slash commands; deterministic injection; the live cache-usage panel | 360 |
+| [concepts/showcase-cli.md](concepts/showcase-cli.md) | The `npm start` REPL demo; slash commands; deterministic injection; streaming + Markdown-rendered replies; the two-row header with the live context-window visualizer and cache-usage panel | 430 |
 
 ## Canonical artifacts (source of truth — not under spec/)
 

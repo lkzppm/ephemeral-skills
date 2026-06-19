@@ -60,6 +60,35 @@ export interface UsageRecord {
   appliedEdits?: AppliedEdits;
 }
 
+/** A single step inside one agentic turn (one model call). */
+export type StackStepKind = "tool" | "wipe" | "answer";
+
+/** One append-ordered block of the live context window, for the CLI visualizer. */
+export type StackItemKind = "system" | "user" | "skill" | "ai";
+
+export interface StackItem {
+  kind: StackItemKind;
+  label: string;
+  tokens: number;
+  /** skill only: the body has been wiped to a stub. */
+  evicted?: boolean;
+  /** ai only: the per-call steps of the loop, in order. */
+  steps?: StackStepKind[];
+}
+
+export interface ContextStack {
+  items: StackItem[];
+  /** Index into `items` of the earliest wiped skill — where the KV cache was
+   *  re-linked (the prefix `P` ends just before it). null = nothing evicted. */
+  cutIndex: number | null;
+}
+
+/** Options for one agent turn. */
+export interface SendOptions {
+  /** Streaming text callback — receives the full text accumulated so far. */
+  onDelta?: (full: string) => void;
+}
+
 export interface InjectResult {
   ok: boolean;
   message: string;
@@ -188,8 +217,81 @@ export class SkillAgent {
     };
   }
 
+  /**
+   * Append-ordered view of the live context window as a stack of blocks —
+   * `[sys] [you·1] [AI·1] [skill] [you·2] [AI·2] …` — in the exact order they
+   * entered context. Each `ai` item carries its per-call steps (tool / wipe /
+   * answer) so an agentic loop expands in place; a `skill` item flips to
+   * `evicted` when its body is wiped. `cutIndex` marks the earliest wiped skill:
+   * the point where the cached prefix `P` ends and the KV cache was re-linked.
+   */
+  contextStack(): ContextStack {
+    const items: StackItem[] = [];
+    if (this.cfg.system) {
+      items.push({ kind: "system", label: "sys", tokens: Math.ceil(this.cfg.system.length / 4) });
+    }
+
+    const skillByIndex = new Map<number, SkillRecord>();
+    for (const r of this.sideTable) skillByIndex.set(r.messageIndex, r);
+
+    let userCount = 0;
+    let aiCount = 0;
+    let curAI: StackItem | null = null;
+
+    this.messages.forEach((m, i) => {
+      const rec = skillByIndex.get(i);
+      if (rec) {
+        items.push({
+          kind: "skill",
+          label: rec.skillName,
+          tokens: rec.evicted ? estimateMessageTokens(m) : rec.tokenLen,
+          evicted: !!rec.evicted,
+        });
+        curAI = null;
+        return;
+      }
+
+      const blocks = Array.isArray(m.content) ? m.content : [];
+      if (m.role === "user") {
+        const isToolResult = blocks.some((b) => (b as ContentBlock).type === "tool_result");
+        if (isToolResult) return; // a tool round inside the open AI loop — not its own block
+        userCount++;
+        items.push({ kind: "user", label: `you·${userCount}`, tokens: estimateMessageTokens(m) });
+        curAI = null;
+        return;
+      }
+
+      // assistant: one model call = one step inside the current AI loop.
+      if (!curAI) {
+        aiCount++;
+        curAI = { kind: "ai", label: `AI·${aiCount}`, tokens: 0, steps: [] };
+        items.push(curAI);
+      }
+      const tool = blocks.find((b) => (b as ContentBlock).type === "tool_use") as
+        | { name?: string }
+        | undefined;
+      const step: StackStepKind = !tool
+        ? "answer"
+        : tool.name === clearSkillToolDef.name
+          ? "wipe"
+          : "tool";
+      curAI.steps!.push(step);
+      curAI.tokens += estimateMessageTokens(m);
+    });
+
+    let cutIndex: number | null = null;
+    for (let k = 0; k < items.length; k++) {
+      if (items[k]!.kind === "skill" && items[k]!.evicted) {
+        cutIndex = k;
+        break;
+      }
+    }
+
+    return { items, cutIndex };
+  }
+
   /** Run one user turn through the agentic tool loop. Requires an API key. */
-  async send(userText: string): Promise<{ text: string; usage: UsageRecord[] }> {
+  async send(userText: string, opts: SendOptions = {}): Promise<{ text: string; usage: UsageRecord[] }> {
     this.step++;
     this.messages.push({ role: "user", content: userText });
 
@@ -200,9 +302,19 @@ export class SkillAgent {
     let finalText = "";
     let guard = 0;
 
+    // Stream text deltas to the caller as one growing string across the whole
+    // turn (so any pre-tool narration stays visible alongside the final answer).
+    let streamed = "";
+    const onText = opts.onDelta
+      ? (delta: string) => {
+          streamed += delta;
+          opts.onDelta!(streamed);
+        }
+      : undefined;
+
     while (guard++ < TOOL_LOOP_GUARD) {
       const label = `turn ${this.step}${guard > 1 ? "." + guard : ""}`;
-      const resp = await this.callModel(label, usage);
+      const resp = await this.callModel(label, usage, onText);
       this.messages.push({ role: "assistant", content: resp.content as unknown as ContentBlock[] });
 
       if (resp.stop_reason !== "tool_use") {
@@ -235,12 +347,18 @@ export class SkillAgent {
       this.messages.push({ role: "user", content: toolResults });
     }
 
-    return { text: finalText, usage };
+    // When streaming, return everything the caller already saw (incl. any
+    // pre-tool narration), so the settled transcript matches the live text.
+    return { text: onText ? streamed || finalText : finalText, usage };
   }
 
   // --- internals --------------------------------------------------------------
 
-  private async callModel(label: string, usage: UsageRecord[]): Promise<Anthropic.Message> {
+  private async callModel(
+    label: string,
+    usage: UsageRecord[],
+    onText?: (delta: string) => void,
+  ): Promise<Anthropic.Message> {
     const client = this.getClient();
 
     const req: Record<string, unknown> = {
@@ -260,9 +378,11 @@ export class SkillAgent {
     }
     if (this.cfg.thinking) req.thinking = { type: "adaptive" };
 
-    const resp = (await client.messages.create(
-      req as unknown as Anthropic.MessageCreateParamsNonStreaming,
-    )) as Anthropic.Message;
+    // Stream so the CLI can paint text as it arrives; finalMessage() still gives
+    // the assembled Message (with cache usage) for the tool loop + accounting.
+    const stream = client.messages.stream(req as unknown as Anthropic.MessageStreamParams);
+    if (onText) stream.on("text", (delta: string) => onText(delta));
+    const resp = (await stream.finalMessage()) as Anthropic.Message;
 
     // Cache-token fields are returned on the wire whenever caching is active;
     // type them structurally so this compiles across SDK versions.

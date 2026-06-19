@@ -2,9 +2,10 @@
 name: showcase-cli
 description: The reference TUI (npm start) — an Ink terminal app with a live-stats header, a scrolling chat transcript, and a bottom-pinned autocompleting input; slash commands inject/evict skills, and the cache-usage panel makes eviction visible
 tags: [cli, tui, ink, showcase, demo, slash-commands, autocomplete]
-updated: 2026-06-18
+updated: 2026-06-19
 anchors:
   - examples/cli.tsx
+  - examples/markdown.ts
   - src/loop.ts
   - src/skillLoader.ts
 related:
@@ -45,15 +46,37 @@ A full-window flexbox column (`useWindowSize` → `width`/`height`), rendered in
 the alternate screen buffer so it doesn't pollute scrollback:
 
 - **Header** (top, fixed, blue): spans the full terminal width
-  (`width={columns}`), with the title `ephemeral_skills` on the left and a live
-  stats line on the right (`justifyContent:"space-between"`) — `skills
-  active/total`, estimated context tokens, last `cache_read` / `cache_creation`,
-  total tokens freed. Recomputed from `agent.contextStats()` + `agent.usageLog`
-  after every action, and streamed mid-turn via the agent's `onUsage` callback.
+  (`width={columns}`) in **two stacked rows**. Row 1: the title
+  `ephemeral_skills` + the live stats line on the left (`skills active/total`,
+  estimated context tokens, last `cache_read` / `cache_creation`, total tokens
+  freed) and a glyph legend on the right (`justifyContent:"space-between"`). Row
+  2: the **context-window visualizer** (`ContextStack`) — an **append-ordered
+  stack of chips**, one per block in the exact order they entered context:
+  `[sys] [you·1] [AI·1] [◆ skill] [you·2] [AI·2] …`, drawn from
+  `agent.contextStack()`. An `AI·k` chip **expands in place to show its loop
+  steps** as glyphs (`▸` tool call · `✂` `clear_skill` wipe · `■` answer), so an
+  agentic turn unfolds step-by-step. A `skill` chip flips from bright `◆ name` to
+  a dim grey `✗ name` the instant its body is wiped. A second **rule row** under
+  the chips marks the cache state aligned to each chip: solid `═` over the warm
+  **cached prefix `P`**, a centered `✂` at the **re-link cut** (`cutIndex`, the
+  earliest wiped skill), and dashed `╌` over the once-rebuilt tail — so you watch
+  the prefix break and the KV cache rebuild at the eviction point. Older chips
+  collapse into a leading `‹N` summary when the row overflows (the collapsed
+  prefix is warm, so it reads as cached); a streaming turn shows a provisional
+  `AI·k ⋯` chip until its first step lands. Recomputed from
+  `agent.contextStats()` + `agent.contextStack()` + `agent.usageLog` after every
+  action and per loop step via the agent's `onUsage` callback.
 - **Transcript** (middle): user (white on a full-width gray block with a `»`
-  prefix, padded to the content width, Claude-Code style) / assistant (green) /
-  system & command responses (cyan) / usage (dim) lines, one blank line between
-  each (`gap={1}`), newest at the bottom. It is the **only flexible region**
+  prefix, padded to the content width, Claude-Code style) / assistant
+  (**Markdown-rendered** — headings, bold/italic, inline + fenced code, GFM
+  pipe tables, lists, blockquotes, rules, via `examples/markdown.ts`; no
+  `assistant ⟩` label) / system & command responses (cyan) / usage (dim) lines,
+  one blank line between each (`gap={1}`), newest at the bottom. Assistant text
+  **streams token-by-token** into its row as the reply arrives (Anthropic
+  `messages.stream` under `agent.send(..., { onDelta })`). The Markdown renderer
+  pre-wraps every block to the content width and emits **one styled row per
+  terminal line**, so the row-counting scroll math below stays exact. It is the
+  **only flexible region**
   (`flexGrow={1}` + `overflow:"hidden"`); the header and the whole bottom region
   are pinned with `flexShrink={0}` so they never shrink or scroll off when
   content overflows. The viewport height is read with `measureElement`, and only

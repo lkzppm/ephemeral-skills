@@ -29,7 +29,10 @@ import {
   loadSkills,
   type LoadedSkill,
   type UsageRecord,
+  type StackItem,
+  type StackStepKind,
 } from "../src/index";
+import { renderMarkdown, type Seg } from "./markdown";
 
 // ---------------------------------------------------------------------------
 // Skill discovery (relative to this file) + shared agent config.
@@ -79,7 +82,7 @@ const COMMAND_DESC: Record<string, string> = {
 };
 
 const MENU_LIMIT = 5;
-const PLACEHOLDER = "message, or /command  ·  Tab completes · Enter sends";
+const PLACEHOLDER = "message, or /command";
 
 // ---------------------------------------------------------------------------
 // Transcript model
@@ -99,6 +102,8 @@ interface Stats {
   lastRead: number;
   lastCreation: number;
   totalFreed: number;
+  items: StackItem[];
+  cutIndex: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,12 +186,10 @@ function commandHighlightSet(value: string): Set<number> {
   return set;
 }
 
-const ASSIST_PREFIX = "assistant ⟩ ";
-
-/** Plain text an entry renders as (before wrapping). */
+/** Plain text a non-assistant entry renders as (before wrapping). Assistant
+ *  entries are rendered as Markdown, not via this path. */
 function entryText(entry: Entry): string {
   if (entry.kind === "user") return `» ${entry.text}`;
-  if (entry.kind === "assistant") return `${ASSIST_PREFIX}${entry.text}`;
   return entry.text;
 }
 
@@ -225,22 +228,34 @@ function wrapText(text: string, width: number): string[] {
   return out;
 }
 
-/** One rendered terminal row of the transcript. */
+/** One rendered terminal row of the transcript. `segs` (when present, for
+ *  Markdown-rendered assistant rows) takes precedence over `text`. */
 interface VisualLine {
   key: string;
   kind: EntryKind | "gap";
   text: string;
   first: boolean;
+  segs?: Seg[];
 }
 
-/** Flatten the transcript into styled rows, with a blank line between entries. */
+/** Flatten the transcript into styled rows, with a blank line between entries.
+ *  Assistant turns are Markdown-rendered (pre-wrapped to `width`); every other
+ *  kind keeps the plain word-wrap path. */
 function flattenTranscript(transcript: Entry[], width: number): VisualLine[] {
   const out: VisualLine[] = [];
   transcript.forEach((entry, ei) => {
     if (ei > 0) out.push({ key: `gap-${entry.id}`, kind: "gap", text: "", first: false });
-    wrapText(entryText(entry), width).forEach((text, li) => {
-      out.push({ key: `${entry.id}-${li}`, kind: entry.kind, text, first: li === 0 });
-    });
+    if (entry.kind === "assistant") {
+      const rows = renderMarkdown(entry.text || " ", width);
+      const lines = rows.length ? rows : [{ segs: [{ text: " " }] }];
+      lines.forEach((l, li) => {
+        out.push({ key: `${entry.id}-${li}`, kind: "assistant", text: "", first: li === 0, segs: l.segs });
+      });
+    } else {
+      wrapText(entryText(entry), width).forEach((text, li) => {
+        out.push({ key: `${entry.id}-${li}`, kind: entry.kind, text, first: li === 0 });
+      });
+    }
   });
   return out;
 }
@@ -323,6 +338,7 @@ function contextStatsText(agent: SkillAgent): string {
 
 function computeStats(agent: SkillAgent): Stats {
   const cs = agent.contextStats();
+  const stack = agent.contextStack();
   const log = agent.usageLog;
   const last = log[log.length - 1];
   return {
@@ -333,6 +349,8 @@ function computeStats(agent: SkillAgent): Stats {
     lastRead: last?.cacheReadTokens ?? 0,
     lastCreation: last?.cacheCreationTokens ?? 0,
     totalFreed: log.reduce((a, u) => a + (u.appliedEdits?.tokensFreed ?? 0), 0),
+    items: stack.items,
+    cutIndex: stack.cutIndex,
   };
 }
 
@@ -340,28 +358,266 @@ function computeStats(agent: SkillAgent): Stats {
 // Components
 // ---------------------------------------------------------------------------
 
-function Header({ stats, width }: { stats: Stats; width: number }) {
-  const line =
-    `skills ${stats.activeSkills}/${stats.skillCount}` +
-    ` · ctx ~${stats.ctxTokens} tok` +
-    ` · read ${stats.lastRead}` +
-    ` · create ${stats.lastCreation}` +
-    ` · freed ${stats.totalFreed}`;
+// Context-window visualizer: append-ordered chips, one per block, plus a rule
+// row underneath marking the cached prefix `P` and the KV-cache re-link cut.
+function chipStyle(item: StackItem): { bg: string; fg: string; dim?: boolean } {
+  switch (item.kind) {
+    case "system":
+      return { bg: "magenta", fg: "white" };
+    case "user":
+      return { bg: "blue", fg: "white" };
+    case "ai":
+      return { bg: "green", fg: "black" };
+    case "skill":
+      return item.evicted ? { bg: "gray", fg: "white", dim: true } : { bg: "yellow", fg: "black" };
+  }
+}
+
+const STEP_GLYPH: Record<StackStepKind, { g: string; fg: string; bold?: boolean }> = {
+  tool: { g: "▸", fg: "black" },
+  wipe: { g: "✂", fg: "white", bold: true },
+  answer: { g: "■", fg: "black" },
+};
+
+const MAX_STEPS = 14;
+
+/** The styled cells of one chip (background-filled, label + any step glyphs). */
+function chipCells(item: StackItem, draft: boolean): Seg[] {
+  const st = chipStyle(item);
+  const base: Seg = { text: "", bg: st.bg, color: st.fg, dim: st.dim };
+
+  if (item.kind === "ai") {
+    const cells: Seg[] = [{ ...base, text: ` ${item.label} ` }];
+    const steps = item.steps ?? [];
+    if (draft && steps.length === 0) {
+      cells.push({ ...base, text: "⋯" });
+    } else {
+      for (const s of steps.slice(0, MAX_STEPS)) {
+        const g = STEP_GLYPH[s];
+        cells.push({ text: g.g, bg: st.bg, color: g.fg, bold: g.bold });
+      }
+      if (steps.length > MAX_STEPS) cells.push({ ...base, text: "+" });
+    }
+    cells.push({ ...base, text: " " });
+    return cells;
+  }
+
+  let label = item.label;
+  if (item.kind === "skill") {
+    const name = item.label.length > 12 ? item.label.slice(0, 12) : item.label;
+    label = item.evicted ? `✗ ${name}` : `◆ ${name}`;
+  }
+  return [{ ...base, text: ` ${label} ` }];
+}
+
+const cellsWidth = (cells: Seg[]): number => cells.reduce((a, c) => a + c.text.length, 0);
+
+/** The rule-row segment under one chip: solid `═` for the cached prefix, `✂`
+ *  centered at the re-link cut, dashed `╌` for the once-rebuilt tail, dotted
+ *  `┄` for the block being written this turn. */
+function ruleSeg(idx: number, isLast: boolean, cutIndex: number | null, w: number): Seg {
+  if (cutIndex !== null) {
+    if (idx < cutIndex) return { text: "═".repeat(w), color: "green", dim: true };
+    if (idx === cutIndex) {
+      const left = Math.floor((w - 1) / 2);
+      return { text: "╌".repeat(left) + "✂" + "╌".repeat(Math.max(0, w - left - 1)), color: "red" };
+    }
+    return { text: "╌".repeat(w), color: "yellow" };
+  }
+  if (isLast) return { text: "┄".repeat(w), color: "cyan", dim: true };
+  return { text: "═".repeat(w), color: "green", dim: true };
+}
+
+interface Chip {
+  idx: number;
+  cells: Seg[];
+  w: number;
+}
+
+function ContextStack({
+  items,
+  cutIndex,
+  streaming,
+  width,
+}: {
+  items: StackItem[];
+  cutIndex: number | null;
+  streaming: boolean;
+  width: number;
+}) {
+  const inner = Math.max(1, width);
+
+  // While a turn is in flight before its first assistant message lands, show a
+  // provisional AI loop so the append is visible the instant you hit Enter.
+  const display: { item: StackItem; idx: number; draft: boolean }[] = items.map((item, idx) => ({
+    item,
+    idx,
+    draft: false,
+  }));
+  if (streaming && (items.length === 0 || items[items.length - 1]!.kind !== "ai")) {
+    const n = items.filter((i) => i.kind === "ai").length + 1;
+    display.push({ item: { kind: "ai", label: `AI·${n}`, tokens: 0, steps: [] }, idx: items.length, draft: true });
+  }
+
+  if (display.length === 0) {
+    return (
+      <Box flexDirection="column">
+        <Text> </Text>
+        <Text dimColor>{"┄".repeat(inner)}</Text>
+      </Box>
+    );
+  }
+
+  const chips: Chip[] = display.map((d) => {
+    const cells = chipCells(d.item, d.draft);
+    return { idx: d.idx, cells, w: cellsWidth(cells) };
+  });
+
+  // Keep the most recent chips; collapse the (warm) older ones into a summary.
+  const GAP = 1;
+  const totalNoSummary = chips.reduce((a, c) => a + c.w, 0) + Math.max(0, chips.length - 1) * GAP;
+  let start = 0;
+  if (totalNoSummary > inner) {
+    for (start = 1; start < chips.length; start++) {
+      const summaryW = `‹${start}`.length + 2;
+      let tot = summaryW + GAP;
+      for (let i = start; i < chips.length; i++) tot += chips[i]!.w + (i > start ? GAP : 0);
+      if (tot <= inner) break;
+    }
+    if (start >= chips.length) start = chips.length - 1;
+  }
+
+  const shown = chips.slice(start);
+  const hidden = start;
+  const lastIdx = display[display.length - 1]!.idx;
+
+  // Summary chip stands in for the collapsed prefix: cached unless the cut is
+  // itself hidden, in which case the visible tail is all post-cut (rebuilt).
+  const summaryRebuilt = cutIndex !== null && cutIndex < start;
+  const summaryChip: Chip | null =
+    hidden > 0
+      ? { idx: -1, cells: [{ text: ` ‹${hidden} `, bg: "gray", color: "white", dim: true }], w: `‹${hidden}`.length + 2 }
+      : null;
+
+  const chipRow: React.ReactNode[] = [];
+  const ruleRow: React.ReactNode[] = [];
+  let key = 0;
+
+  const pushChip = (c: Chip, rule: Seg, gapBefore: boolean) => {
+    if (gapBefore) {
+      chipRow.push(<Text key={`g${key}`}> </Text>);
+      ruleRow.push(<Text key={`gr${key}`}> </Text>);
+    }
+    chipRow.push(
+      <Text key={`c${key}`}>
+        {c.cells.map((s, i) => (
+          <Text key={i} backgroundColor={s.bg} color={s.color} bold={s.bold} dimColor={s.dim}>
+            {s.text}
+          </Text>
+        ))}
+      </Text>,
+    );
+    ruleRow.push(
+      <Text key={`r${key}`} color={rule.color} dimColor={rule.dim}>
+        {rule.text}
+      </Text>,
+    );
+    key++;
+  };
+
+  if (summaryChip) {
+    const rule: Seg = summaryRebuilt
+      ? { text: "╌".repeat(summaryChip.w), color: "yellow" }
+      : { text: "═".repeat(summaryChip.w), color: "green", dim: true };
+    pushChip(summaryChip, rule, false);
+  }
+  shown.forEach((c, i) => {
+    const rule = ruleSeg(c.idx, c.idx === lastIdx, cutIndex, c.w);
+    pushChip(c, rule, summaryChip !== null || i > 0);
+  });
+
   return (
-    <Box
-      width={width}
-      flexShrink={0}
-      borderStyle="round"
-      borderColor="blue"
-      paddingX={1}
-      justifyContent="space-between"
-    >
-      <Text bold color="blue">
-        ephemeral_skills
+    <Box flexDirection="column">
+      <Text wrap="truncate-start">{chipRow}</Text>
+      <Text wrap="truncate-start">{ruleRow}</Text>
+    </Box>
+  );
+}
+
+const STEP_LEGEND: [string, string, string][] = [
+  ["■", "green", "answer"],
+  ["▸", "white", "tool"],
+  ["✂", "red", "wipe"],
+  ["═", "green", "cached"],
+  ["╌", "yellow", "rebuilt"],
+];
+
+function Legend() {
+  return (
+    <Text wrap="truncate-end">
+      {STEP_LEGEND.map(([glyph, color, label], i) => (
+        <Text key={label}>
+          {i > 0 ? " " : ""}
+          <Text color={color}>{glyph}</Text>
+          <Text dimColor>{` ${label} `}</Text>
+        </Text>
+      ))}
+    </Text>
+  );
+}
+
+function Header({
+  stats,
+  streaming,
+  width,
+}: {
+  stats: Stats;
+  streaming: boolean;
+  width: number;
+}) {
+  const inner = Math.max(1, width - 4); // round border (2) + paddingX (2)
+  return (
+    <Box width={width} flexShrink={0} flexDirection="column" borderStyle="round" borderColor="blue" paddingX={1}>
+      <Box width={inner} justifyContent="space-between">
+        <Text bold color="blue">
+          ephemeral_skills
+        </Text>
+        <Legend />
+      </Box>
+      <Box width={inner} flexDirection="column">
+        <ContextStack items={stats.items} cutIndex={stats.cutIndex} streaming={streaming} width={inner} />
+      </Box>
+    </Box>
+  );
+}
+
+/** One `label value` counter with a colored label. */
+function Counter({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <Text>
+      <Text color={color} bold>
+        {label}
       </Text>
-      <Text dimColor wrap="truncate-start">
-        {line}
-      </Text>
+      <Text>{` ${value}`}</Text>
+    </Text>
+  );
+}
+
+/** Bottom status line: the skill counter on the left, cache counters on the
+ *  right, each label color-coded. */
+function Counters({ stats, width }: { stats: Stats; width: number }) {
+  return (
+    <Box width={width} paddingX={1} justifyContent="space-between">
+      <Counter label="skills" value={`${stats.activeSkills}/${stats.skillCount}`} color="green" />
+      <Box>
+        <Counter label="ctx" value={`~${stats.ctxTokens} tok`} color="blue" />
+        <Text dimColor>{"   "}</Text>
+        <Counter label="read" value={`${stats.lastRead}`} color="cyan" />
+        <Text dimColor>{"   "}</Text>
+        <Counter label="create" value={`${stats.lastCreation}`} color="yellow" />
+        <Text dimColor>{"   "}</Text>
+        <Counter label="freed" value={`${stats.totalFreed}`} color="magenta" />
+      </Box>
     </Box>
   );
 }
@@ -408,18 +664,28 @@ function VisualLineView({ line, width }: { line: VisualLine; width: number }) {
         </Text>
       );
     }
-    case "assistant":
-      if (line.first && line.text.startsWith(ASSIST_PREFIX)) {
-        return (
-          <Text>
-            <Text bold color="green">
-              {ASSIST_PREFIX}
+    case "assistant": {
+      const segs = line.segs ?? [{ text: line.text }];
+      const empty = !segs.some((s) => s.text !== "");
+      if (empty) return <Text> </Text>;
+      return (
+        <Text wrap="truncate-end">
+          {segs.map((s, i) => (
+            <Text
+              key={i}
+              bold={s.bold}
+              italic={s.italic}
+              underline={s.underline}
+              dimColor={s.dim}
+              color={s.color}
+              backgroundColor={s.bg}
+            >
+              {s.text}
             </Text>
-            {line.text.slice(ASSIST_PREFIX.length) || " "}
-          </Text>
-        );
-      }
-      return <Text>{line.text || " "}</Text>;
+          ))}
+        </Text>
+      );
+    }
     case "system":
       return <Text color="cyan">{line.text || " "}</Text>;
     case "usage":
@@ -445,6 +711,7 @@ function CommandInput({
   onSubmit: (value: string) => void;
   history: string[];
 }) {
+  const { columns } = useWindowSize();
   const [value, setValueState] = useState("");
   const [cursor, setCursorState] = useState(0);
   const [selected, setSelectedState] = useState(0);
@@ -628,17 +895,20 @@ function CommandInput({
 
   return (
     <Box flexDirection="column">
+      {value === "" ? (
+        <Box width={columns} paddingX={1} justifyContent="space-between">
+          <Text dimColor>
+            type <Text color="cyan">/</Text> for commands
+          </Text>
+          <Text dimColor wrap="truncate-end">Tab completes · Enter sends · Shift+↑/↓ scroll</Text>
+        </Box>
+      ) : null}
+
       <Box borderStyle="round" borderColor="blue" paddingX={1}>
         {line}
       </Box>
 
-      {value === "" ? (
-        <Box paddingX={1}>
-          <Text dimColor>
-            type <Text color="cyan">/</Text> for commands · Tab completes · Enter sends · Shift+↑/↓ scroll
-          </Text>
-        </Box>
-      ) : matches.length > 0 ? (
+      {value !== "" && matches.length > 0 ? (
         <Box flexDirection="column" paddingX={1}>
           {matches.slice(0, MENU_LIMIT).map((m, i) => {
             const isSel = i === selClamped;
@@ -716,6 +986,8 @@ function App() {
     lastRead: 0,
     lastCreation: 0,
     totalFreed: 0,
+    items: [],
+    cutIndex: null,
   }));
   const [busy, setBusy] = useState(false);
   const [picker, setPickerState] = useState(false);
@@ -926,13 +1198,28 @@ function App() {
         }
       }
 
+      // A live, growing assistant entry the stream writes into.
+      const assistantId = nextId();
+      setTranscript((prev) => [...prev, { id: assistantId, kind: "assistant", text: "" }]);
+      setScroll(0);
       setBusy(true);
+
+      const onDelta = (full: string) => {
+        setTranscript((prev) => prev.map((e) => (e.id === assistantId ? { ...e, text: full } : e)));
+        setScroll(0);
+      };
+
       void (async () => {
+        const pending = agent.send(value, { onDelta });
+        refreshStats(); // the user message (+ any mentioned skills) are in context now
         try {
-          const { text } = await agent.send(value);
-          push("assistant", text);
+          const { text } = await pending;
+          setTranscript((prev) =>
+            prev.map((e) => (e.id === assistantId ? { ...e, text: text || "(no response)" } : e)),
+          );
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          setTranscript((prev) => prev.filter((e) => e.id !== assistantId));
           push("error", `API error: ${msg}\n  hint: set ANTHROPIC_API_KEY in .env or the environment.`);
         } finally {
           refreshStats();
@@ -954,17 +1241,13 @@ function App() {
 
   return (
     <Box width={columns} height={rows} flexDirection="column">
-      <Header stats={stats} width={columns} />
+      <Header stats={stats} streaming={busy} width={columns} />
 
       {/* Scroll viewport — the only flexible region; clips overflow. */}
       <Box ref={viewportRef} flexGrow={1} flexDirection="column" justifyContent="flex-end" overflow="hidden" paddingX={1}>
-        {transcript.length === 0 ? (
-          <Text dimColor>
-            {`No messages yet. Try  /skills  then  /${skills[0]?.name ?? "use <name>"}  — or just ask a question.`}
-          </Text>
-        ) : (
-          windowLines.map((line) => <VisualLineView key={line.key} line={line} width={lineWidth} />)
-        )}
+        {windowLines.map((line) => (
+          <VisualLineView key={line.key} line={line} width={lineWidth} />
+        ))}
       </Box>
 
       {/* Breathing room before the input — doubles as the scroll indicator. */}
@@ -993,6 +1276,9 @@ function App() {
         ) : (
           <CommandInput onSubmit={onSubmit} history={history} />
         )}
+
+        {/* Live context / cache counters — bottom status line. */}
+        <Counters stats={stats} width={columns} />
       </Box>
     </Box>
   );
