@@ -12,7 +12,7 @@ updated: 2026-06-17
 - **Layer A — SDK reference strategy (this repo, built first).** A client-side
   transform over the `messages` array in an Agent SDK loop. This is the faithful
   prototype: the Claude Agent SDK *is* the Claude Code harness exposed as a
-  library. It ships with a reference CLI (`examples/cli.tsx`, `npm start`) that
+  library. It ships with a reference CLI (`cli/cli.tsx`, `npm start`) that
   demonstrates injection → use → eviction with a live cache-usage panel.
 - **Layer B — native harness proposal (RFC).** The same selector implemented
   inside the harness as a `context-management` strategy, plus frontmatter and the

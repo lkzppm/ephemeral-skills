@@ -43,11 +43,11 @@ Agent SDK loop (edges: instances + requests + clear_skill tool)
 | [spec/concepts/eviction-triggers.md](spec/concepts/eviction-triggers.md) | The three triggers + the `clear_skill` tool; the strict `ephemeral` gate; `target` vs policy |
 | [spec/concepts/cache-correctness.md](spec/concepts/cache-correctness.md) | Breakpoint after `P`; one write pass `ω·X`; `appliedEdits` |
 | [spec/concepts/cache-relinking.md](spec/concepts/cache-relinking.md) | Visualizing the KV-cache snip-and-rebuild; the per-turn usage trace; explaining the mechanism to someone |
-| [spec/concepts/showcase-cli.md](spec/concepts/showcase-cli.md) | The `npm start` REPL demo; slash commands; the cache-usage panel |
+| [spec/concepts/showcase-cli.md](spec/concepts/showcase-cli.md) | The `npm start` REPL demo; slash commands; streaming + Markdown replies; the two-row header with the context-window visualizer + cache-usage panel |
 
 Full router with token budgets: [spec/INDEX.md](spec/INDEX.md). Source-of-truth
 artifacts: [PRD.md](PRD.md), [docs/cost-model.md](docs/cost-model.md),
-[PR_BODY.md](PR_BODY.md). Per-milestone work: [spec/tasks/](spec/tasks/).
+[ISSUE_COMMENT_BODY.md](ISSUE_COMMENT_BODY.md). Per-milestone work: [spec/tasks/](spec/tasks/).
 
 ## Response style
 

@@ -22,7 +22,7 @@ policy (the `ephemeral` gate). See
 The motivating gap is upstream issue **#21583**. Full requirements live in
 [`PRD.md`](../PRD.md); the economic justification in
 [`docs/cost-model.md`](../docs/cost-model.md); the upstream framing in
-[`PR_BODY.md`](../PR_BODY.md).
+[`ISSUE_COMMENT_BODY.md`](../ISSUE_COMMENT_BODY.md).
 
 ## Two delivery layers
 
@@ -33,12 +33,13 @@ The motivating gap is upstream issue **#21583**. Full requirements live in
 
 ## Reference CLI showcase (`npm start`)
 
-A local Ink TUI (`examples/cli.tsx`) that mimics the Claude Code surface to make the
-mechanism visible: load skills from `skills/`, inject one with `/<name>`, do work,
-then evict via `/clear-skill`, the model's `clear_skill` tool, or an automatic
-trigger — and watch the per-turn `cache_read` / `cache_creation` panel show the
-token drop. It is a demo / measurement surface, distinct from the un-patchable
-production `claude` TUI. See [concepts/showcase-cli.md](concepts/showcase-cli.md).
+A local Ink TUI (`cli/cli.tsx`) that mimics the Claude Code surface to make the
+mechanism visible: load the agent's skills from `agent/skills/`, inject one with
+`/<name>`, do work, then evict via `/clear-skill`, the model's `clear_skill`
+tool, or an automatic trigger — and watch the per-turn `cached` / `fresh` cache
+counters show the token drop. It is a demo / measurement surface, distinct from
+the un-patchable production `claude` TUI. See
+[concepts/showcase-cli.md](concepts/showcase-cli.md).
 
 ## Stack
 

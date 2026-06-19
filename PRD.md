@@ -1,7 +1,7 @@
 # PRD — `clear_skill_uses`: ephemeral skill context eviction
 
 > Implementation context for this repo. Pair with [`docs/cost-model.md`](docs/cost-model.md)
-> for the economic justification and [`PR_BODY.md`](PR_BODY.md) for the upstream framing.
+> for the economic justification and [`ISSUE_COMMENT_BODY.md`](ISSUE_COMMENT_BODY.md) for the upstream framing.
 
 ## 1. Problem
 
@@ -89,8 +89,8 @@ so per-skill mid-array eviction would be impossible.)
 On eviction, replace the body with a compact stub, e.g.:
 
 ```
-[skill "backend-knowledge" was invoked earlier and has been evicted to free
-context. Re-invoke /backend-knowledge to reload its instructions.]
+[skill "regex-cookbook" was invoked earlier and has been evicted to free
+context. Re-invoke /regex-cookbook to reload its instructions.]
 ```
 
 Rationale (inherited from `clear_tool_uses`): keeping the record that the skill ran
@@ -133,7 +133,7 @@ human override) — is provided in the reference CLI (§7).
 
 - **Agent SDK (TS/Python):** full implementation lands here. The SDK *is* the Claude
   Code harness exposed as a library, so a strategy here is the faithful prototype.
-- **Reference CLI showcase (`npm start`):** a local Ink TUI (`examples/cli.tsx`) over the
+- **Reference CLI showcase (`npm start`):** a local Ink TUI (`cli/cli.tsx`) over the
   SDK loop that injects skills via slash commands (with autocomplete) and shows a
   live header + per-turn cache-usage panel — the legible demo and interactive face of the M3 harness. It is a
   purpose-built showcase, **not** the production TUI.

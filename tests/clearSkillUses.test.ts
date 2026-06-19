@@ -29,12 +29,12 @@ describe("isEvictionWorthIt (cost gate)", () => {
 describe("clearSkillUses (core transform)", () => {
   const messages: Message[] = [
     { role: "user", content: "implement the backend" },
-    { role: "assistant", content: [{ type: "skill", skill_name: "backend-knowledge", body: "…long instructions…" }] },
+    { role: "assistant", content: [{ type: "skill", skill_name: "regex-cookbook", body: "…long instructions…" }] },
     { role: "assistant", content: [{ type: "tool_result", text: "read src/api.py …" }] },
     { role: "user", content: "now wire the frontend" },
   ];
   const sideTable: SkillRecord[] = [
-    { invocationId: "inv-1", skillName: "backend-knowledge", messageIndex: 1, tokenLen: 2000, ephemeral: true },
+    { invocationId: "inv-1", skillName: "regex-cookbook", messageIndex: 1, tokenLen: 2000, ephemeral: true },
   ];
 
   it("replaces the skill body with a stub and reports tokens freed", () => {
@@ -60,8 +60,8 @@ describe("clearSkillUses (core transform)", () => {
 
 describe("makeStub", () => {
   it("names the skill and tells the model how to reload", () => {
-    const s = makeStub("backend-knowledge");
-    expect(s).toContain("backend-knowledge");
+    const s = makeStub("regex-cookbook");
+    expect(s).toContain("regex-cookbook");
     expect(s.toLowerCase()).toContain("re-invoke");
   });
 });

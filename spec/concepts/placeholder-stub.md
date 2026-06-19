@@ -22,8 +22,8 @@ skill record â€” `{ type: "skill", skill_name, body: <stub>, evicted: true }` â€
 the prefix above it is untouched and the model still sees that the skill ran:
 
 ```
-[skill "backend-knowledge" was invoked earlier and has been evicted to free
-context. Re-invoke /backend-knowledge to reload its instructions.]
+[skill "regex-cookbook" was invoked earlier and has been evicted to free
+context. Re-invoke /regex-cookbook to reload its instructions.]
 ```
 
 ## Why keep the record (not delete the message)

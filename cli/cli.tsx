@@ -14,7 +14,7 @@
  * agent turn. A `/skill-name` mentioned inside an agent turn is injected for that
  * turn (mention → inject), so skills can be invoked mid-sentence.
  *
- * Run with:  npm start   (or: tsx examples/cli.tsx)
+ * Run with:  npm start   (or: tsx cli/cli.tsx)
  * Requires:  ANTHROPIC_API_KEY for agent.send() — put it in .env (auto-loaded) or
  *            the environment. Every slash command works without a credential.
  */
@@ -29,20 +29,18 @@ import {
   loadSkills,
   type LoadedSkill,
   type UsageRecord,
+  type StackItem,
+  type StackStepKind,
 } from "../src/index";
+import { renderMarkdown, type Seg } from "./markdown";
+import { SYSTEM_PROMPT } from "../agent/systemPrompt";
 
 // ---------------------------------------------------------------------------
-// Skill discovery (relative to this file) + shared agent config.
+// Skill discovery (the agent's skills live in agent/skills) + shared config.
 // ---------------------------------------------------------------------------
-const skillsDir = fileURLToPath(new URL("../skills", import.meta.url));
+const skillsDir = fileURLToPath(new URL("../agent/skills", import.meta.url));
 const skills = loadSkills(skillsDir);
 const skillNames = skills.map((s) => s.name);
-
-const SYSTEM_PROMPT =
-  "You are a helpful coding assistant. " +
-  "When a skill is injected into context it appears as a <skill> block. " +
-  "Read and apply it. " +
-  "Once you are done with an ephemeral skill you may call the clear_skill tool to free context tokens.";
 
 const KNOWN_COMMANDS = new Set([
   "help",
@@ -79,7 +77,7 @@ const COMMAND_DESC: Record<string, string> = {
 };
 
 const MENU_LIMIT = 5;
-const PLACEHOLDER = "message, or /command  ·  Tab completes · Enter sends";
+const PLACEHOLDER = "message, or /command";
 
 // ---------------------------------------------------------------------------
 // Transcript model
@@ -99,6 +97,9 @@ interface Stats {
   lastRead: number;
   lastCreation: number;
   totalFreed: number;
+  items: StackItem[];
+  cutIndex: number | null;
+  reprocessPending: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,12 +182,10 @@ function commandHighlightSet(value: string): Set<number> {
   return set;
 }
 
-const ASSIST_PREFIX = "assistant ⟩ ";
-
-/** Plain text an entry renders as (before wrapping). */
+/** Plain text a non-assistant entry renders as (before wrapping). Assistant
+ *  entries are rendered as Markdown, not via this path. */
 function entryText(entry: Entry): string {
   if (entry.kind === "user") return `» ${entry.text}`;
-  if (entry.kind === "assistant") return `${ASSIST_PREFIX}${entry.text}`;
   return entry.text;
 }
 
@@ -225,25 +224,40 @@ function wrapText(text: string, width: number): string[] {
   return out;
 }
 
-/** One rendered terminal row of the transcript. */
+/** One rendered terminal row of the transcript. `segs` (when present, for
+ *  Markdown-rendered assistant rows) takes precedence over `text`. */
 interface VisualLine {
   key: string;
   kind: EntryKind | "gap";
   text: string;
   first: boolean;
+  segs?: Seg[];
 }
 
-/** Flatten the transcript into styled rows, with a blank line between entries. */
+/** Flatten the transcript into styled rows, with a blank line between entries.
+ *  Assistant turns are Markdown-rendered (pre-wrapped to `width`); every other
+ *  kind keeps the plain word-wrap path. */
 function flattenTranscript(transcript: Entry[], width: number): VisualLine[] {
   const out: VisualLine[] = [];
   transcript.forEach((entry, ei) => {
     if (ei > 0) out.push({ key: `gap-${entry.id}`, kind: "gap", text: "", first: false });
-    wrapText(entryText(entry), width).forEach((text, li) => {
-      out.push({ key: `${entry.id}-${li}`, kind: entry.kind, text, first: li === 0 });
-    });
+    if (entry.kind === "assistant") {
+      const rows = renderMarkdown(entry.text || " ", width);
+      const lines = rows.length ? rows : [{ segs: [{ text: " " }] }];
+      lines.forEach((l, li) => {
+        out.push({ key: `${entry.id}-${li}`, kind: "assistant", text: "", first: li === 0, segs: l.segs });
+      });
+    } else {
+      wrapText(entryText(entry), width).forEach((text, li) => {
+        out.push({ key: `${entry.id}-${li}`, kind: entry.kind, text, first: li === 0 });
+      });
+    }
   });
   return out;
 }
+
+/** Column header for the picker / banner table (same widths as `skillRow`). */
+const SKILL_HEAD = "name".padEnd(22) + "ephemeral".padEnd(11) + "tokenLen".padEnd(12) + "evictAfter";
 
 /** A skill's row in the picker / banner table. */
 function skillRow(s: LoadedSkill): string {
@@ -277,13 +291,12 @@ function helpText(): string {
 
 function skillsTableText(list: LoadedSkill[]): string {
   if (list.length === 0) return "(no skills loaded)";
-  const head = "name".padEnd(22) + "ephemeral".padEnd(11) + "tokenLen".padEnd(12) + "evictAfter";
-  return [head, "-".repeat(58), ...list.map(skillRow)].join("\n");
+  return [SKILL_HEAD, "-".repeat(58), ...list.map(skillRow)].join("\n");
 }
 
 function formatUsage(u: UsageRecord): string {
   let line =
-    `[${u.step}] read=${u.cacheReadTokens} create=${u.cacheCreationTokens}` +
+    `[${u.step}] cached=${u.cacheReadTokens} fresh=${u.cacheCreationTokens}` +
     ` in=${u.inputTokens} out=${u.outputTokens}`;
   if (u.appliedEdits) {
     const e = u.appliedEdits;
@@ -297,7 +310,7 @@ function usageLogText(log: UsageRecord[]): string {
   return [
     "-- usage panel --",
     ...log.map(formatUsage),
-    "hint: after eviction cache_read drops on later turns — that gap is the payoff.",
+    "hint: after eviction `cached` drops on later turns (fewer tokens re-read) — that gap is the payoff.",
   ].join("\n");
 }
 
@@ -323,16 +336,21 @@ function contextStatsText(agent: SkillAgent): string {
 
 function computeStats(agent: SkillAgent): Stats {
   const cs = agent.contextStats();
+  const stack = agent.contextStack();
   const log = agent.usageLog;
   const last = log[log.length - 1];
   return {
-    skillCount: cs.skills.length,
+    // total = skills available to inject; active = non-evicted skills in context.
+    skillCount: skills.length,
     activeSkills: cs.skills.filter((s) => !s.evicted).length,
     ctxTokens: cs.estimatedTokens,
     msgCount: cs.messageCount,
     lastRead: last?.cacheReadTokens ?? 0,
     lastCreation: last?.cacheCreationTokens ?? 0,
     totalFreed: log.reduce((a, u) => a + (u.appliedEdits?.tokensFreed ?? 0), 0),
+    items: stack.items,
+    cutIndex: stack.cutIndex,
+    reprocessPending: stack.reprocessPending,
   };
 }
 
@@ -340,28 +358,282 @@ function computeStats(agent: SkillAgent): Stats {
 // Components
 // ---------------------------------------------------------------------------
 
-function Header({ stats, width }: { stats: Stats; width: number }) {
-  const line =
-    `skills ${stats.activeSkills}/${stats.skillCount}` +
-    ` · ctx ~${stats.ctxTokens} tok` +
-    ` · read ${stats.lastRead}` +
-    ` · create ${stats.lastCreation}` +
-    ` · freed ${stats.totalFreed}`;
+// Context-window visualizer: append-ordered chips, one per block, plus a rule
+// row underneath marking the cached prefix `P` and the KV-cache re-link cut.
+function chipStyle(item: StackItem): { bg: string; fg: string; dim?: boolean } {
+  switch (item.kind) {
+    case "system":
+      return { bg: "magenta", fg: "white" };
+    case "user":
+      return { bg: "blue", fg: "white" };
+    case "ai":
+      return { bg: "green", fg: "black" };
+    case "skill":
+      return item.evicted ? { bg: "gray", fg: "white", dim: true } : { bg: "yellow", fg: "black" };
+  }
+}
+
+const STEP_GLYPH: Record<StackStepKind, { g: string; fg: string; bold?: boolean }> = {
+  tool: { g: "▸", fg: "black" },
+  wipe: { g: "✂", fg: "white", bold: true },
+  answer: { g: "■", fg: "black" },
+};
+
+const MAX_STEPS = 14;
+
+/** The styled cells of one chip (background-filled, label + any step glyphs). */
+function chipCells(item: StackItem, draft: boolean): Seg[] {
+  const st = chipStyle(item);
+  const base: Seg = { text: "", bg: st.bg, color: st.fg, dim: st.dim };
+
+  if (item.kind === "ai") {
+    const cells: Seg[] = [{ ...base, text: ` ${item.label} ` }];
+    const steps = item.steps ?? [];
+    if (draft && steps.length === 0) {
+      cells.push({ ...base, text: "⋯" });
+    } else {
+      for (const s of steps.slice(0, MAX_STEPS)) {
+        const g = STEP_GLYPH[s];
+        cells.push({ text: g.g, bg: st.bg, color: g.fg, bold: g.bold });
+      }
+      if (steps.length > MAX_STEPS) cells.push({ ...base, text: "+" });
+    }
+    cells.push({ ...base, text: " " });
+    return cells;
+  }
+
+  let label = item.label;
+  if (item.kind === "skill") {
+    const name = item.label.length > 12 ? item.label.slice(0, 12) : item.label;
+    label = item.evicted ? `✗ ${name}` : `◆ ${name}`;
+  }
+  return [{ ...base, text: ` ${label} ` }];
+}
+
+const cellsWidth = (cells: Seg[]): number => cells.reduce((a, c) => a + c.text.length, 0);
+
+/** The rule-row segment under one chip: solid `═` for the cached prefix, `✂`
+ *  centered at the re-link cut, dashed `╌` for the tail still owing its one-time
+ *  reprocess (only while `pending`), dotted `┄` for the block written this turn.
+ *  Once the reprocess settles the tail re-caches, so it returns to blue `═`. */
+function ruleSeg(idx: number, isLast: boolean, cutIndex: number | null, pending: boolean, w: number): Seg {
+  const cached: Seg = { text: "═".repeat(w), color: "blue" };
+  const fresh: Seg = { text: "┄".repeat(w), color: "cyan", dim: true };
+
+  if (cutIndex !== null) {
+    if (idx === cutIndex) {
+      const left = Math.floor((w - 1) / 2);
+      const fill = pending ? "╌" : "═"; // scar sits on the cached line once settled
+      return { text: fill.repeat(left) + "✂" + fill.repeat(Math.max(0, w - left - 1)), color: "red" };
+    }
+    if (idx > cutIndex) {
+      if (pending) return { text: "╌".repeat(w), color: "yellow" };
+      return isLast ? fresh : cached; // re-cached after the reprocess settled
+    }
+    return cached; // idx < cutIndex — always warm
+  }
+  return isLast ? fresh : cached;
+}
+
+interface Chip {
+  idx: number;
+  cells: Seg[];
+  w: number;
+}
+
+function ContextStack({
+  items,
+  cutIndex,
+  reprocessPending,
+  streaming,
+  width,
+}: {
+  items: StackItem[];
+  cutIndex: number | null;
+  reprocessPending: boolean;
+  streaming: boolean;
+  width: number;
+}) {
+  const inner = Math.max(1, width);
+
+  // While a turn is in flight before its first assistant message lands, show a
+  // provisional AI loop so the append is visible the instant you hit Enter.
+  const display: { item: StackItem; idx: number; draft: boolean }[] = items.map((item, idx) => ({
+    item,
+    idx,
+    draft: false,
+  }));
+  if (streaming && (items.length === 0 || items[items.length - 1]!.kind !== "ai")) {
+    const n = items.filter((i) => i.kind === "ai").length + 1;
+    display.push({ item: { kind: "ai", label: `AI·${n}`, tokens: 0, steps: [] }, idx: items.length, draft: true });
+  }
+
+  if (display.length === 0) {
+    return (
+      <Box flexDirection="column">
+        <Text> </Text>
+        <Text dimColor>{"┄".repeat(inner)}</Text>
+      </Box>
+    );
+  }
+
+  const chips: Chip[] = display.map((d) => {
+    const cells = chipCells(d.item, d.draft);
+    return { idx: d.idx, cells, w: cellsWidth(cells) };
+  });
+
+  // Keep the most recent chips; collapse the (warm) older ones into a summary.
+  const GAP = 1;
+  const totalNoSummary = chips.reduce((a, c) => a + c.w, 0) + Math.max(0, chips.length - 1) * GAP;
+  let start = 0;
+  if (totalNoSummary > inner) {
+    for (start = 1; start < chips.length; start++) {
+      const summaryW = `‹${start}`.length + 2;
+      let tot = summaryW + GAP;
+      for (let i = start; i < chips.length; i++) tot += chips[i]!.w + (i > start ? GAP : 0);
+      if (tot <= inner) break;
+    }
+    if (start >= chips.length) start = chips.length - 1;
+  }
+
+  const shown = chips.slice(start);
+  const hidden = start;
+  const lastIdx = display[display.length - 1]!.idx;
+
+  // Summary chip stands in for the collapsed prefix: cached unless a reprocess
+  // is still pending AND the cut is itself hidden (then the visible tail is all
+  // post-cut, awaiting rebuild).
+  const summaryRebuilt = reprocessPending && cutIndex !== null && cutIndex < start;
+  const summaryChip: Chip | null =
+    hidden > 0
+      ? { idx: -1, cells: [{ text: ` ‹${hidden} `, bg: "gray", color: "white", dim: true }], w: `‹${hidden}`.length + 2 }
+      : null;
+
+  const chipRow: React.ReactNode[] = [];
+  const ruleRow: React.ReactNode[] = [];
+  let key = 0;
+
+  const pushChip = (c: Chip, rule: Seg, gapBefore: boolean) => {
+    if (gapBefore) {
+      chipRow.push(<Text key={`g${key}`}> </Text>);
+      ruleRow.push(<Text key={`gr${key}`}> </Text>);
+    }
+    chipRow.push(
+      <Text key={`c${key}`}>
+        {c.cells.map((s, i) => (
+          <Text key={i} backgroundColor={s.bg} color={s.color} bold={s.bold} dimColor={s.dim}>
+            {s.text}
+          </Text>
+        ))}
+      </Text>,
+    );
+    ruleRow.push(
+      <Text key={`r${key}`} color={rule.color} dimColor={rule.dim}>
+        {rule.text}
+      </Text>,
+    );
+    key++;
+  };
+
+  if (summaryChip) {
+    const rule: Seg = summaryRebuilt
+      ? { text: "╌".repeat(summaryChip.w), color: "yellow" }
+      : { text: "═".repeat(summaryChip.w), color: "blue" };
+    pushChip(summaryChip, rule, false);
+  }
+  shown.forEach((c, i) => {
+    const rule = ruleSeg(c.idx, c.idx === lastIdx, cutIndex, reprocessPending, c.w);
+    pushChip(c, rule, summaryChip !== null || i > 0);
+  });
+
   return (
-    <Box
-      width={width}
-      flexShrink={0}
-      borderStyle="round"
-      borderColor="blue"
-      paddingX={1}
-      justifyContent="space-between"
-    >
-      <Text bold color="blue">
-        ephemeral_skills
+    <Box flexDirection="column">
+      <Text wrap="truncate-start">{chipRow}</Text>
+      <Text wrap="truncate-start">{ruleRow}</Text>
+    </Box>
+  );
+}
+
+const STEP_LEGEND: [string, string, string][] = [
+  ["■", "green", "answer"],
+  ["▸", "white", "tool"],
+  ["✂", "red", "wipe"],
+  ["═", "blue", "cached"],
+  ["╌", "yellow", "rebuilt"],
+];
+
+function Legend() {
+  return (
+    <Text wrap="truncate-end">
+      {STEP_LEGEND.map(([glyph, color, label], i) => (
+        <Text key={label}>
+          {i > 0 ? " " : ""}
+          <Text color={color}>{glyph}</Text>
+          <Text dimColor>{` ${label} `}</Text>
+        </Text>
+      ))}
+    </Text>
+  );
+}
+
+function Header({
+  stats,
+  streaming,
+  width,
+}: {
+  stats: Stats;
+  streaming: boolean;
+  width: number;
+}) {
+  const inner = Math.max(1, width - 4); // round border (2) + paddingX (2)
+  return (
+    <Box width={width} flexShrink={0} flexDirection="column" borderStyle="round" borderColor="blue" paddingX={1}>
+      <Box width={inner} justifyContent="space-between">
+        <Text bold color="blue">
+          ephemeral_skills
+        </Text>
+        <Legend />
+      </Box>
+      <Box width={inner} flexDirection="column" marginTop={1}>
+        <ContextStack
+          items={stats.items}
+          cutIndex={stats.cutIndex}
+          reprocessPending={stats.reprocessPending}
+          streaming={streaming}
+          width={inner}
+        />
+      </Box>
+    </Box>
+  );
+}
+
+/** One `label value` counter with a colored label. */
+function Counter({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <Text>
+      <Text color={color} bold>
+        {label}
       </Text>
-      <Text dimColor wrap="truncate-start">
-        {line}
-      </Text>
+      <Text>{` ${value}`}</Text>
+    </Text>
+  );
+}
+
+/** Bottom status line: the skill counter on the left, cache counters on the
+ *  right, each label color-coded. */
+function Counters({ stats, width }: { stats: Stats; width: number }) {
+  return (
+    <Box width={width} paddingX={1} justifyContent="space-between">
+      <Counter label="skills" value={`${stats.activeSkills}/${stats.skillCount}`} color="green" />
+      <Box>
+        <Counter label="ctx" value={`~${stats.ctxTokens} tok`} color="white" />
+        <Text dimColor>{"   "}</Text>
+        <Counter label="cached" value={`${stats.lastRead}`} color="blue" />
+        <Text dimColor>{"   "}</Text>
+        <Counter label="fresh" value={`${stats.lastCreation}`} color="cyan" />
+        <Text dimColor>{"   "}</Text>
+        <Counter label="freed" value={`${stats.totalFreed}`} color="magenta" />
+      </Box>
     </Box>
   );
 }
@@ -408,18 +680,28 @@ function VisualLineView({ line, width }: { line: VisualLine; width: number }) {
         </Text>
       );
     }
-    case "assistant":
-      if (line.first && line.text.startsWith(ASSIST_PREFIX)) {
-        return (
-          <Text>
-            <Text bold color="green">
-              {ASSIST_PREFIX}
+    case "assistant": {
+      const segs = line.segs ?? [{ text: line.text }];
+      const empty = !segs.some((s) => s.text !== "");
+      if (empty) return <Text> </Text>;
+      return (
+        <Text wrap="truncate-end">
+          {segs.map((s, i) => (
+            <Text
+              key={i}
+              bold={s.bold}
+              italic={s.italic}
+              underline={s.underline}
+              dimColor={s.dim}
+              color={s.color}
+              backgroundColor={s.bg}
+            >
+              {s.text}
             </Text>
-            {line.text.slice(ASSIST_PREFIX.length) || " "}
-          </Text>
-        );
-      }
-      return <Text>{line.text || " "}</Text>;
+          ))}
+        </Text>
+      );
+    }
     case "system":
       return <Text color="cyan">{line.text || " "}</Text>;
     case "usage":
@@ -445,6 +727,7 @@ function CommandInput({
   onSubmit: (value: string) => void;
   history: string[];
 }) {
+  const { columns } = useWindowSize();
   const [value, setValueState] = useState("");
   const [cursor, setCursorState] = useState(0);
   const [selected, setSelectedState] = useState(0);
@@ -628,17 +911,20 @@ function CommandInput({
 
   return (
     <Box flexDirection="column">
+      {value === "" ? (
+        <Box width={columns} paddingX={1} justifyContent="space-between">
+          <Text dimColor>
+            type <Text color="cyan">/</Text> for commands
+          </Text>
+          <Text dimColor wrap="truncate-end">Tab completes · Enter sends · Shift+↑/↓ scroll</Text>
+        </Box>
+      ) : null}
+
       <Box borderStyle="round" borderColor="blue" paddingX={1}>
         {line}
       </Box>
 
-      {value === "" ? (
-        <Box paddingX={1}>
-          <Text dimColor>
-            type <Text color="cyan">/</Text> for commands · Tab completes · Enter sends · Shift+↑/↓ scroll
-          </Text>
-        </Box>
-      ) : matches.length > 0 ? (
+      {value !== "" && matches.length > 0 ? (
         <Box flexDirection="column" paddingX={1}>
           {matches.slice(0, MENU_LIMIT).map((m, i) => {
             const isSel = i === selClamped;
@@ -691,14 +977,84 @@ function SkillsMenu({ onPick, onCancel }: { onPick: (name: string) => void; onCa
       {skills.length === 0 ? (
         <Text dimColor>(no skills loaded)</Text>
       ) : (
-        skills.map((s, i) =>
+        <Text dimColor>{`  ${SKILL_HEAD}`}</Text>
+      )}
+      {skills.length === 0
+        ? null
+        : skills.map((s, i) =>
           i === idx ? (
             <Text key={s.name} color="black" backgroundColor="cyan">{`▸ ${skillRow(s)} `}</Text>
           ) : (
             <Text key={s.name}>{`  ${skillRow(s)}`}</Text>
           ),
-        )
-      )}
+        )}
+    </Box>
+  );
+}
+
+type OverlayKind = "help" | "usage" | "context";
+
+const OVERLAY_TITLE: Record<OverlayKind, string> = {
+  help: "help · commands",
+  usage: "usage · per-turn cache",
+  context: "context · blocks in window",
+};
+
+function overlayLines(kind: OverlayKind, agent: SkillAgent): string[] {
+  switch (kind) {
+    case "help":
+      return helpText().split("\n");
+    case "usage":
+      return usageLogText(agent.usageLog).split("\n");
+    case "context":
+      return contextStatsText(agent).split("\n");
+  }
+}
+
+/** A modal info panel (like the skills picker) for /help, /usage, /context —
+ *  scrollable with ↑/↓ · PageUp/Dn, dismissed with Esc / Enter / q. */
+function InfoPanel({
+  kind,
+  agent,
+  rows,
+  onClose,
+}: {
+  kind: OverlayKind;
+  agent: SkillAgent;
+  rows: number;
+  onClose: () => void;
+}) {
+  const lines = overlayLines(kind, agent);
+  const maxVisible = Math.max(3, Math.min(lines.length, rows - 11));
+  const maxOff = Math.max(0, lines.length - maxVisible);
+
+  const [off, setOffState] = useState(0);
+  const offRef = useRef(0);
+  const setOff = (n: number) => {
+    const c = Math.max(0, Math.min(maxOff, n));
+    offRef.current = c;
+    setOffState(c);
+  };
+
+  useInput((input, key) => {
+    if (key.escape || key.return || input === "q") return onClose();
+    if (key.upArrow) return setOff(offRef.current - 1);
+    if (key.downArrow) return setOff(offRef.current + 1);
+    if (key.pageUp) return setOff(offRef.current - maxVisible);
+    if (key.pageDown) return setOff(offRef.current + maxVisible);
+  });
+
+  const start = Math.min(off, maxOff);
+  const visible = lines.slice(start, start + maxVisible);
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text color="cyan" bold>{`${OVERLAY_TITLE[kind]} · ↑/↓ scroll · Esc close`}</Text>
+      {visible.map((l, i) => (
+        <Text key={i}>{l || " "}</Text>
+      ))}
+      {lines.length > maxVisible ? (
+        <Text dimColor>{`  ${start + 1}–${start + visible.length} of ${lines.length}`}</Text>
+      ) : null}
     </Box>
   );
 }
@@ -716,9 +1072,13 @@ function App() {
     lastRead: 0,
     lastCreation: 0,
     totalFreed: 0,
+    items: [],
+    cutIndex: null,
+    reprocessPending: false,
   }));
   const [busy, setBusy] = useState(false);
   const [picker, setPickerState] = useState(false);
+  const [overlay, setOverlay] = useState<OverlayKind | null>(null);
   const [escArmed, setEscArmedState] = useState(false);
 
   // Submitted-input history (oldest first), recalled with ↑/↓ in the input.
@@ -800,8 +1160,9 @@ function App() {
     setStats(computeStats(agent));
   }, [agent]);
 
-  onUsageRef.current = (u: UsageRecord) => {
-    push("usage", formatUsage(u));
+  // Per-turn cache usage feeds the live header/bottom counters (and the /usage
+  // panel reads agent.usageLog on demand) — no longer printed into the chat.
+  onUsageRef.current = () => {
     refreshStats();
   };
 
@@ -840,7 +1201,7 @@ function App() {
       }
       disarmEsc();
     },
-    { isActive: !picker },
+    { isActive: !picker && !overlay },
   );
 
   const runSlash = useCallback(
@@ -856,7 +1217,7 @@ function App() {
 
       switch (cmd) {
         case "help":
-          push("system", helpText());
+          setOverlay("help");
           break;
         case "skills":
           setPicker(true);
@@ -882,10 +1243,10 @@ function App() {
           break;
         }
         case "usage":
-          push("usage", usageLogText(agent.usageLog));
+          setOverlay("usage");
           break;
         case "context":
-          push("system", contextStatsText(agent));
+          setOverlay("context");
           break;
         case "quit":
         case "exit":
@@ -926,13 +1287,28 @@ function App() {
         }
       }
 
+      // A live, growing assistant entry the stream writes into.
+      const assistantId = nextId();
+      setTranscript((prev) => [...prev, { id: assistantId, kind: "assistant", text: "" }]);
+      setScroll(0);
       setBusy(true);
+
+      const onDelta = (full: string) => {
+        setTranscript((prev) => prev.map((e) => (e.id === assistantId ? { ...e, text: full } : e)));
+        setScroll(0);
+      };
+
       void (async () => {
+        const pending = agent.send(value, { onDelta });
+        refreshStats(); // the user message (+ any mentioned skills) are in context now
         try {
-          const { text } = await agent.send(value);
-          push("assistant", text);
+          const { text } = await pending;
+          setTranscript((prev) =>
+            prev.map((e) => (e.id === assistantId ? { ...e, text: text || "(no response)" } : e)),
+          );
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          setTranscript((prev) => prev.filter((e) => e.id !== assistantId));
           push("error", `API error: ${msg}\n  hint: set ANTHROPIC_API_KEY in .env or the environment.`);
         } finally {
           refreshStats();
@@ -954,17 +1330,13 @@ function App() {
 
   return (
     <Box width={columns} height={rows} flexDirection="column">
-      <Header stats={stats} width={columns} />
+      <Header stats={stats} streaming={busy} width={columns} />
 
       {/* Scroll viewport — the only flexible region; clips overflow. */}
       <Box ref={viewportRef} flexGrow={1} flexDirection="column" justifyContent="flex-end" overflow="hidden" paddingX={1}>
-        {transcript.length === 0 ? (
-          <Text dimColor>
-            {`No messages yet. Try  /skills  then  /${skills[0]?.name ?? "use <name>"}  — or just ask a question.`}
-          </Text>
-        ) : (
-          windowLines.map((line) => <VisualLineView key={line.key} line={line} width={lineWidth} />)
-        )}
+        {windowLines.map((line) => (
+          <VisualLineView key={line.key} line={line} width={lineWidth} />
+        ))}
       </Box>
 
       {/* Breathing room before the input — doubles as the scroll indicator. */}
@@ -986,6 +1358,8 @@ function App() {
 
         {picker ? (
           <SkillsMenu onPick={pickSkill} onCancel={() => setPicker(false)} />
+        ) : overlay ? (
+          <InfoPanel kind={overlay} agent={agent} rows={rows} onClose={() => setOverlay(null)} />
         ) : busy ? (
           <Box borderStyle="round" borderColor="gray" paddingX={1}>
             <Spinner label="thinking…" />
@@ -993,6 +1367,9 @@ function App() {
         ) : (
           <CommandInput onSubmit={onSubmit} history={history} />
         )}
+
+        {/* Live context / cache counters — bottom status line. */}
+        <Counters stats={stats} width={columns} />
       </Box>
     </Box>
   );
