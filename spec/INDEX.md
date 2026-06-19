@@ -19,7 +19,7 @@
 |---|---|---|
 | [../PRD.md](../PRD.md) | Requirements, design, API/frontmatter shape, edge cases, milestones, testing strategy | 1800 |
 | [../docs/cost-model.md](../docs/cost-model.md) | The prefix-cache economics; the `ρ·s·M > ω·X` decision rule and break-even `M*` | 920 |
-| [../PR_BODY.md](../PR_BODY.md) | Upstream framing + prior-art citations; the design promised to upstream | 900 |
+| [../ISSUE_COMMENT_BODY.md](../ISSUE_COMMENT_BODY.md) | Upstream framing + prior-art citations; the design promised to upstream | 900 |
 
 The [tasks/](tasks/) directory holds one spec per milestone (M1–M4), each with a
 `milestone:` frontmatter block (state + blocks/blockedBy). It's the entry point

@@ -9,7 +9,7 @@ description: "File the reference impl + cost data as a comment reviving #21583, 
 tags: [milestone, rfc, upstream, m4]
 updated: 2026-06-17
 related:
-  - PR_BODY.md
+  - ISSUE_COMMENT_BODY.md
   - spec/project/architecture.md
 ---
 
@@ -27,7 +27,7 @@ native `clear_skill_uses` (Layer B).
 
 In:
 - A writeup citing the reference impl (Layer A) and the empirical break-even data
-  (M3), framed per [`PR_BODY.md`](../../PR_BODY.md).
+  (M3), framed per [`ISSUE_COMMENT_BODY.md`](../../ISSUE_COMMENT_BODY.md).
 - The Layer B native-strategy proposal: `context-management` integration,
   frontmatter, optional `evict_skill` tool.
 
@@ -37,7 +37,7 @@ Out:
 ## Acceptance Criteria
 
 - [ ] Comment on #21583 with the reference impl + reproducible cost data.
-- [ ] Draft RFC for native `clear_skill_uses` aligned with `PR_BODY.md` (no
+- [ ] Draft RFC for native `clear_skill_uses` aligned with `ISSUE_COMMENT_BODY.md` (no
       design drift from what's promised there).
 
 ## Notes

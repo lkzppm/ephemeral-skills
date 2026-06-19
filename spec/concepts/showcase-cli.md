@@ -111,10 +111,10 @@ own via the `clear_skill` tool (see [eviction-triggers](eviction-triggers.md)).
 After each request the CLI prints `usage.cache_read_input_tokens` and
 `usage.cache_creation_input_tokens`. The demo arc:
 
-1. `/backend-knowledge` → inject a fat (~2k token) skill.
+1. `/regex-cookbook` → inject a fat (~2k token) skill.
 2. ask it to do a few steps → the skill is read each turn (`cache_read` includes
    `s`).
-3. `/clear-skill backend-knowledge` → a one-time `cache_creation` spike ≈ `ω·X`,
+3. `/clear-skill regex-cookbook` → a one-time `cache_creation` spike ≈ `ω·X`,
    then every subsequent `cache_read` is ≈ `ρ·s` lower. The crossover is the cost
    model rendered in real tokens.
 

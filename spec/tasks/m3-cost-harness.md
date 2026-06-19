@@ -49,4 +49,4 @@ Out:
 ## Notes
 
 - This is the evidence that backs the M4 RFC. Keep raw captures so the numbers
-  in `PR_BODY.md` are reproducible.
+  in `ISSUE_COMMENT_BODY.md` are reproducible.

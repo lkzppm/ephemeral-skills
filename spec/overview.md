@@ -22,7 +22,7 @@ policy (the `ephemeral` gate). See
 The motivating gap is upstream issue **#21583**. Full requirements live in
 [`PRD.md`](../PRD.md); the economic justification in
 [`docs/cost-model.md`](../docs/cost-model.md); the upstream framing in
-[`PR_BODY.md`](../PR_BODY.md).
+[`ISSUE_COMMENT_BODY.md`](../ISSUE_COMMENT_BODY.md).
 
 ## Two delivery layers
 

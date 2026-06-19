@@ -47,7 +47,7 @@ Agent SDK loop (edges: instances + requests + clear_skill tool)
 
 Full router with token budgets: [spec/INDEX.md](spec/INDEX.md). Source-of-truth
 artifacts: [PRD.md](PRD.md), [docs/cost-model.md](docs/cost-model.md),
-[PR_BODY.md](PR_BODY.md). Per-milestone work: [spec/tasks/](spec/tasks/).
+[ISSUE_COMMENT_BODY.md](ISSUE_COMMENT_BODY.md). Per-milestone work: [spec/tasks/](spec/tasks/).
 
 ## Response style
 

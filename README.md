@@ -4,7 +4,7 @@
 
 Today, when a skill is invoked in Claude Code, its rendered `SKILL.md` enters the
 conversation as a single message and **stays there for the rest of the session**.
-A "knowledge-delivery" skill (e.g. `/backend-knowledge` that explains how to
+A "knowledge-delivery" skill (e.g. `/regex-cookbook` that explains how to
 implement something) keeps paying a recurring token cost and dilutes attention
 long after its instructions have been consumed.
 
@@ -54,9 +54,9 @@ a gateway, set `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` in `.env` instead.
 ```
 npm start
 » /skills                            # skills discovered under skills/
-» /backend-knowledge                 # inject a fat (~2.8k tok) skill
+» /regex-cookbook                 # inject a fat (~2.8k tok) skill
 » Explain PUT vs PATCH for my API.   # use it (cache_read now includes the skill)
-» /clear-skill backend-knowledge     # evict it
+» /clear-skill regex-cookbook     # evict it
 » Any follow-up…                     # cache_read is ~ρ·s smaller; one-time spike at the cut
 » /usage                             # the per-turn cache log
 ```

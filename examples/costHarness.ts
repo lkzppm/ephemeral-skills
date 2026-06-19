@@ -59,9 +59,9 @@ async function main(): Promise<void> {
   }
 
   // --- Pick the fat ephemeral skill ------------------------------------
-  // Prefer "backend-knowledge"; fall back to the largest ephemeral skill.
+  // Prefer "regex-cookbook"; fall back to the largest ephemeral skill.
   let fatSkill =
-    skills.find((sk) => sk.name === "backend-knowledge" && sk.frontmatter.ephemeral) ??
+    skills.find((sk) => sk.name === "regex-cookbook" && sk.frontmatter.ephemeral) ??
     skills
       .filter((sk) => sk.frontmatter.ephemeral)
       .sort((a, b) => b.tokenLen - a.tokenLen)[0];
