@@ -6,12 +6,12 @@
  * against actual Messages API cache usage.
  *
  * Usage:
- *   ANTHROPIC_API_KEY=sk-… tsx examples/costHarness.ts [tailTurns]
- *   TAIL=12 tsx examples/costHarness.ts
+ *   ANTHROPIC_API_KEY=sk-… tsx cli/costHarness.ts [tailTurns]
+ *   TAIL=12 tsx cli/costHarness.ts
  *
  * Output:
  *   stdout — CSV + SUMMARY block
- *   examples/out/usage.csv — same CSV persisted to disk
+ *   cli/out/usage.csv — same CSV persisted to disk
  *
  * Requires real API access; makes ~9 requests by default (2 use + 6 tail + overhead).
  */
@@ -49,9 +49,9 @@ const OMEGA = 1.25; // cache-write price relative to fresh input (5-min TTL)
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  // --- Resolve skills directory next to this file's package root --------
-  const harnessDir = dirname(dirname(fileURLToPath(import.meta.url)));
-  const skillsDir = join(harnessDir, "skills");
+  // --- Resolve the agent's skills directory from the package root --------
+  const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+  const skillsDir = join(repoRoot, "agent", "skills");
   const skills = loadSkills(skillsDir);
 
   if (skills.length === 0) {
@@ -155,8 +155,8 @@ async function main(): Promise<void> {
   console.log("\n--- CSV ---");
   console.log(csv);
 
-  // Write CSV to examples/out/usage.csv
-  const outDir = join(harnessDir, "examples", "out");
+  // Write CSV to cli/out/usage.csv
+  const outDir = join(repoRoot, "cli", "out");
   mkdirSync(outDir, { recursive: true });
   const csvPath = join(outDir, "usage.csv");
   writeFileSync(csvPath, csv, "utf-8");

@@ -14,7 +14,7 @@
  * agent turn. A `/skill-name` mentioned inside an agent turn is injected for that
  * turn (mention → inject), so skills can be invoked mid-sentence.
  *
- * Run with:  npm start   (or: tsx examples/cli.tsx)
+ * Run with:  npm start   (or: tsx cli/cli.tsx)
  * Requires:  ANTHROPIC_API_KEY for agent.send() — put it in .env (auto-loaded) or
  *            the environment. Every slash command works without a credential.
  */
@@ -33,19 +33,14 @@ import {
   type StackStepKind,
 } from "../src/index";
 import { renderMarkdown, type Seg } from "./markdown";
+import { SYSTEM_PROMPT } from "../agent/systemPrompt";
 
 // ---------------------------------------------------------------------------
-// Skill discovery (relative to this file) + shared agent config.
+// Skill discovery (the agent's skills live in agent/skills) + shared config.
 // ---------------------------------------------------------------------------
-const skillsDir = fileURLToPath(new URL("../skills", import.meta.url));
+const skillsDir = fileURLToPath(new URL("../agent/skills", import.meta.url));
 const skills = loadSkills(skillsDir);
 const skillNames = skills.map((s) => s.name);
-
-const SYSTEM_PROMPT =
-  "You are a helpful coding assistant. " +
-  "When a skill is injected into context it appears as a <skill> block. " +
-  "Read and apply it. " +
-  "Once you are done with an ephemeral skill you may call the clear_skill tool to free context tokens.";
 
 const KNOWN_COMMANDS = new Set([
   "help",
@@ -104,6 +99,7 @@ interface Stats {
   totalFreed: number;
   items: StackItem[];
   cutIndex: number | null;
+  reprocessPending: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +256,9 @@ function flattenTranscript(transcript: Entry[], width: number): VisualLine[] {
   return out;
 }
 
+/** Column header for the picker / banner table (same widths as `skillRow`). */
+const SKILL_HEAD = "name".padEnd(22) + "ephemeral".padEnd(11) + "tokenLen".padEnd(12) + "evictAfter";
+
 /** A skill's row in the picker / banner table. */
 function skillRow(s: LoadedSkill): string {
   return (
@@ -292,13 +291,12 @@ function helpText(): string {
 
 function skillsTableText(list: LoadedSkill[]): string {
   if (list.length === 0) return "(no skills loaded)";
-  const head = "name".padEnd(22) + "ephemeral".padEnd(11) + "tokenLen".padEnd(12) + "evictAfter";
-  return [head, "-".repeat(58), ...list.map(skillRow)].join("\n");
+  return [SKILL_HEAD, "-".repeat(58), ...list.map(skillRow)].join("\n");
 }
 
 function formatUsage(u: UsageRecord): string {
   let line =
-    `[${u.step}] read=${u.cacheReadTokens} create=${u.cacheCreationTokens}` +
+    `[${u.step}] cached=${u.cacheReadTokens} fresh=${u.cacheCreationTokens}` +
     ` in=${u.inputTokens} out=${u.outputTokens}`;
   if (u.appliedEdits) {
     const e = u.appliedEdits;
@@ -312,7 +310,7 @@ function usageLogText(log: UsageRecord[]): string {
   return [
     "-- usage panel --",
     ...log.map(formatUsage),
-    "hint: after eviction cache_read drops on later turns — that gap is the payoff.",
+    "hint: after eviction `cached` drops on later turns (fewer tokens re-read) — that gap is the payoff.",
   ].join("\n");
 }
 
@@ -342,7 +340,8 @@ function computeStats(agent: SkillAgent): Stats {
   const log = agent.usageLog;
   const last = log[log.length - 1];
   return {
-    skillCount: cs.skills.length,
+    // total = skills available to inject; active = non-evicted skills in context.
+    skillCount: skills.length,
     activeSkills: cs.skills.filter((s) => !s.evicted).length,
     ctxTokens: cs.estimatedTokens,
     msgCount: cs.messageCount,
@@ -351,6 +350,7 @@ function computeStats(agent: SkillAgent): Stats {
     totalFreed: log.reduce((a, u) => a + (u.appliedEdits?.tokensFreed ?? 0), 0),
     items: stack.items,
     cutIndex: stack.cutIndex,
+    reprocessPending: stack.reprocessPending,
   };
 }
 
@@ -413,19 +413,26 @@ function chipCells(item: StackItem, draft: boolean): Seg[] {
 const cellsWidth = (cells: Seg[]): number => cells.reduce((a, c) => a + c.text.length, 0);
 
 /** The rule-row segment under one chip: solid `═` for the cached prefix, `✂`
- *  centered at the re-link cut, dashed `╌` for the once-rebuilt tail, dotted
- *  `┄` for the block being written this turn. */
-function ruleSeg(idx: number, isLast: boolean, cutIndex: number | null, w: number): Seg {
+ *  centered at the re-link cut, dashed `╌` for the tail still owing its one-time
+ *  reprocess (only while `pending`), dotted `┄` for the block written this turn.
+ *  Once the reprocess settles the tail re-caches, so it returns to blue `═`. */
+function ruleSeg(idx: number, isLast: boolean, cutIndex: number | null, pending: boolean, w: number): Seg {
+  const cached: Seg = { text: "═".repeat(w), color: "blue" };
+  const fresh: Seg = { text: "┄".repeat(w), color: "cyan", dim: true };
+
   if (cutIndex !== null) {
-    if (idx < cutIndex) return { text: "═".repeat(w), color: "green", dim: true };
     if (idx === cutIndex) {
       const left = Math.floor((w - 1) / 2);
-      return { text: "╌".repeat(left) + "✂" + "╌".repeat(Math.max(0, w - left - 1)), color: "red" };
+      const fill = pending ? "╌" : "═"; // scar sits on the cached line once settled
+      return { text: fill.repeat(left) + "✂" + fill.repeat(Math.max(0, w - left - 1)), color: "red" };
     }
-    return { text: "╌".repeat(w), color: "yellow" };
+    if (idx > cutIndex) {
+      if (pending) return { text: "╌".repeat(w), color: "yellow" };
+      return isLast ? fresh : cached; // re-cached after the reprocess settled
+    }
+    return cached; // idx < cutIndex — always warm
   }
-  if (isLast) return { text: "┄".repeat(w), color: "cyan", dim: true };
-  return { text: "═".repeat(w), color: "green", dim: true };
+  return isLast ? fresh : cached;
 }
 
 interface Chip {
@@ -437,11 +444,13 @@ interface Chip {
 function ContextStack({
   items,
   cutIndex,
+  reprocessPending,
   streaming,
   width,
 }: {
   items: StackItem[];
   cutIndex: number | null;
+  reprocessPending: boolean;
   streaming: boolean;
   width: number;
 }) {
@@ -491,9 +500,10 @@ function ContextStack({
   const hidden = start;
   const lastIdx = display[display.length - 1]!.idx;
 
-  // Summary chip stands in for the collapsed prefix: cached unless the cut is
-  // itself hidden, in which case the visible tail is all post-cut (rebuilt).
-  const summaryRebuilt = cutIndex !== null && cutIndex < start;
+  // Summary chip stands in for the collapsed prefix: cached unless a reprocess
+  // is still pending AND the cut is itself hidden (then the visible tail is all
+  // post-cut, awaiting rebuild).
+  const summaryRebuilt = reprocessPending && cutIndex !== null && cutIndex < start;
   const summaryChip: Chip | null =
     hidden > 0
       ? { idx: -1, cells: [{ text: ` ‹${hidden} `, bg: "gray", color: "white", dim: true }], w: `‹${hidden}`.length + 2 }
@@ -528,11 +538,11 @@ function ContextStack({
   if (summaryChip) {
     const rule: Seg = summaryRebuilt
       ? { text: "╌".repeat(summaryChip.w), color: "yellow" }
-      : { text: "═".repeat(summaryChip.w), color: "green", dim: true };
+      : { text: "═".repeat(summaryChip.w), color: "blue" };
     pushChip(summaryChip, rule, false);
   }
   shown.forEach((c, i) => {
-    const rule = ruleSeg(c.idx, c.idx === lastIdx, cutIndex, c.w);
+    const rule = ruleSeg(c.idx, c.idx === lastIdx, cutIndex, reprocessPending, c.w);
     pushChip(c, rule, summaryChip !== null || i > 0);
   });
 
@@ -548,7 +558,7 @@ const STEP_LEGEND: [string, string, string][] = [
   ["■", "green", "answer"],
   ["▸", "white", "tool"],
   ["✂", "red", "wipe"],
-  ["═", "green", "cached"],
+  ["═", "blue", "cached"],
   ["╌", "yellow", "rebuilt"],
 ];
 
@@ -584,8 +594,14 @@ function Header({
         </Text>
         <Legend />
       </Box>
-      <Box width={inner} flexDirection="column">
-        <ContextStack items={stats.items} cutIndex={stats.cutIndex} streaming={streaming} width={inner} />
+      <Box width={inner} flexDirection="column" marginTop={1}>
+        <ContextStack
+          items={stats.items}
+          cutIndex={stats.cutIndex}
+          reprocessPending={stats.reprocessPending}
+          streaming={streaming}
+          width={inner}
+        />
       </Box>
     </Box>
   );
@@ -610,11 +626,11 @@ function Counters({ stats, width }: { stats: Stats; width: number }) {
     <Box width={width} paddingX={1} justifyContent="space-between">
       <Counter label="skills" value={`${stats.activeSkills}/${stats.skillCount}`} color="green" />
       <Box>
-        <Counter label="ctx" value={`~${stats.ctxTokens} tok`} color="blue" />
+        <Counter label="ctx" value={`~${stats.ctxTokens} tok`} color="white" />
         <Text dimColor>{"   "}</Text>
-        <Counter label="read" value={`${stats.lastRead}`} color="cyan" />
+        <Counter label="cached" value={`${stats.lastRead}`} color="blue" />
         <Text dimColor>{"   "}</Text>
-        <Counter label="create" value={`${stats.lastCreation}`} color="yellow" />
+        <Counter label="fresh" value={`${stats.lastCreation}`} color="cyan" />
         <Text dimColor>{"   "}</Text>
         <Counter label="freed" value={`${stats.totalFreed}`} color="magenta" />
       </Box>
@@ -961,14 +977,84 @@ function SkillsMenu({ onPick, onCancel }: { onPick: (name: string) => void; onCa
       {skills.length === 0 ? (
         <Text dimColor>(no skills loaded)</Text>
       ) : (
-        skills.map((s, i) =>
+        <Text dimColor>{`  ${SKILL_HEAD}`}</Text>
+      )}
+      {skills.length === 0
+        ? null
+        : skills.map((s, i) =>
           i === idx ? (
             <Text key={s.name} color="black" backgroundColor="cyan">{`▸ ${skillRow(s)} `}</Text>
           ) : (
             <Text key={s.name}>{`  ${skillRow(s)}`}</Text>
           ),
-        )
-      )}
+        )}
+    </Box>
+  );
+}
+
+type OverlayKind = "help" | "usage" | "context";
+
+const OVERLAY_TITLE: Record<OverlayKind, string> = {
+  help: "help · commands",
+  usage: "usage · per-turn cache",
+  context: "context · blocks in window",
+};
+
+function overlayLines(kind: OverlayKind, agent: SkillAgent): string[] {
+  switch (kind) {
+    case "help":
+      return helpText().split("\n");
+    case "usage":
+      return usageLogText(agent.usageLog).split("\n");
+    case "context":
+      return contextStatsText(agent).split("\n");
+  }
+}
+
+/** A modal info panel (like the skills picker) for /help, /usage, /context —
+ *  scrollable with ↑/↓ · PageUp/Dn, dismissed with Esc / Enter / q. */
+function InfoPanel({
+  kind,
+  agent,
+  rows,
+  onClose,
+}: {
+  kind: OverlayKind;
+  agent: SkillAgent;
+  rows: number;
+  onClose: () => void;
+}) {
+  const lines = overlayLines(kind, agent);
+  const maxVisible = Math.max(3, Math.min(lines.length, rows - 11));
+  const maxOff = Math.max(0, lines.length - maxVisible);
+
+  const [off, setOffState] = useState(0);
+  const offRef = useRef(0);
+  const setOff = (n: number) => {
+    const c = Math.max(0, Math.min(maxOff, n));
+    offRef.current = c;
+    setOffState(c);
+  };
+
+  useInput((input, key) => {
+    if (key.escape || key.return || input === "q") return onClose();
+    if (key.upArrow) return setOff(offRef.current - 1);
+    if (key.downArrow) return setOff(offRef.current + 1);
+    if (key.pageUp) return setOff(offRef.current - maxVisible);
+    if (key.pageDown) return setOff(offRef.current + maxVisible);
+  });
+
+  const start = Math.min(off, maxOff);
+  const visible = lines.slice(start, start + maxVisible);
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text color="cyan" bold>{`${OVERLAY_TITLE[kind]} · ↑/↓ scroll · Esc close`}</Text>
+      {visible.map((l, i) => (
+        <Text key={i}>{l || " "}</Text>
+      ))}
+      {lines.length > maxVisible ? (
+        <Text dimColor>{`  ${start + 1}–${start + visible.length} of ${lines.length}`}</Text>
+      ) : null}
     </Box>
   );
 }
@@ -988,9 +1074,11 @@ function App() {
     totalFreed: 0,
     items: [],
     cutIndex: null,
+    reprocessPending: false,
   }));
   const [busy, setBusy] = useState(false);
   const [picker, setPickerState] = useState(false);
+  const [overlay, setOverlay] = useState<OverlayKind | null>(null);
   const [escArmed, setEscArmedState] = useState(false);
 
   // Submitted-input history (oldest first), recalled with ↑/↓ in the input.
@@ -1072,8 +1160,9 @@ function App() {
     setStats(computeStats(agent));
   }, [agent]);
 
-  onUsageRef.current = (u: UsageRecord) => {
-    push("usage", formatUsage(u));
+  // Per-turn cache usage feeds the live header/bottom counters (and the /usage
+  // panel reads agent.usageLog on demand) — no longer printed into the chat.
+  onUsageRef.current = () => {
     refreshStats();
   };
 
@@ -1112,7 +1201,7 @@ function App() {
       }
       disarmEsc();
     },
-    { isActive: !picker },
+    { isActive: !picker && !overlay },
   );
 
   const runSlash = useCallback(
@@ -1128,7 +1217,7 @@ function App() {
 
       switch (cmd) {
         case "help":
-          push("system", helpText());
+          setOverlay("help");
           break;
         case "skills":
           setPicker(true);
@@ -1154,10 +1243,10 @@ function App() {
           break;
         }
         case "usage":
-          push("usage", usageLogText(agent.usageLog));
+          setOverlay("usage");
           break;
         case "context":
-          push("system", contextStatsText(agent));
+          setOverlay("context");
           break;
         case "quit":
         case "exit":
@@ -1269,6 +1358,8 @@ function App() {
 
         {picker ? (
           <SkillsMenu onPick={pickSkill} onCancel={() => setPicker(false)} />
+        ) : overlay ? (
+          <InfoPanel kind={overlay} agent={agent} rows={rows} onClose={() => setOverlay(null)} />
         ) : busy ? (
           <Box borderStyle="round" borderColor="gray" paddingX={1}>
             <Spinner label="thinking…" />

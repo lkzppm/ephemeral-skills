@@ -133,7 +133,7 @@ human override) — is provided in the reference CLI (§7).
 
 - **Agent SDK (TS/Python):** full implementation lands here. The SDK *is* the Claude
   Code harness exposed as a library, so a strategy here is the faithful prototype.
-- **Reference CLI showcase (`npm start`):** a local Ink TUI (`examples/cli.tsx`) over the
+- **Reference CLI showcase (`npm start`):** a local Ink TUI (`cli/cli.tsx`) over the
   SDK loop that injects skills via slash commands (with autocomplete) and shows a
   live header + per-turn cache-usage panel — the legible demo and interactive face of the M3 harness. It is a
   purpose-built showcase, **not** the production TUI.

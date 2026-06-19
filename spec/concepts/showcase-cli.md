@@ -4,8 +4,9 @@ description: The reference TUI (npm start) — an Ink terminal app with a live-s
 tags: [cli, tui, ink, showcase, demo, slash-commands, autocomplete]
 updated: 2026-06-19
 anchors:
-  - examples/cli.tsx
-  - examples/markdown.ts
+  - cli/cli.tsx
+  - cli/markdown.ts
+  - agent/systemPrompt.ts
   - src/loop.ts
   - src/skillLoader.ts
 related:
@@ -18,11 +19,15 @@ related:
 
 ## Location
 
-`examples/cli.tsx` (entry: `npm start`), built on `src/loop.ts` and
-`src/skillLoader.ts`. It's an [Ink](https://github.com/vadimdemedes/ink) (React
-for the terminal) app; autocomplete comes from `@inkjs/ui`'s `TextInput`
-`suggestions` prop. These three deps (`ink`, `react`, `@inkjs/ui`) live only at
-this showcase edge — the pure core and `src/loop.ts` stay free of them.
+`cli/cli.tsx` (entry: `npm start`), built on `src/loop.ts` and
+`src/skillLoader.ts`. Markdown rendering lives in `cli/markdown.ts`; the cost
+harness alongside it in `cli/costHarness.ts`. The agent it drives is defined
+under `agent/` — its persona in `agent/systemPrompt.ts` (deliberately ~2k tokens
+so it alone clears Haiku's prompt-cache floor) and its skills in `agent/skills/`.
+It's an [Ink](https://github.com/vadimdemedes/ink) (React for the terminal) app;
+the input/autocomplete is a small custom `useInput` controller. These deps
+(`ink`, `react`, `@inkjs/ui`) live only at this showcase edge — the pure core and
+`src/loop.ts` stay free of them.
 
 ## Purpose
 
@@ -69,7 +74,7 @@ the alternate screen buffer so it doesn't pollute scrollback:
 - **Transcript** (middle): user (white on a full-width gray block with a `»`
   prefix, padded to the content width, Claude-Code style) / assistant
   (**Markdown-rendered** — headings, bold/italic, inline + fenced code, GFM
-  pipe tables, lists, blockquotes, rules, via `examples/markdown.ts`; no
+  pipe tables, lists, blockquotes, rules, via `cli/markdown.ts`; no
   `assistant ⟩` label) / system & command responses (cyan) / usage (dim) lines,
   one blank line between each (`gap={1}`), newest at the bottom. Assistant text
   **streams token-by-token** into its row as the reply arrives (Anthropic

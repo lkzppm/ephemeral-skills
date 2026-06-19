@@ -81,6 +81,10 @@ export interface ContextStack {
   /** Index into `items` of the earliest wiped skill — where the KV cache was
    *  re-linked (the prefix `P` ends just before it). null = nothing evicted. */
   cutIndex: number | null;
+  /** True while a wipe's one-time reprocess (`ω·X`) is still owed — i.e. a skill
+   *  was cleared but no request has paid for it yet. Once the next request
+   *  settles, the tail re-caches and this is false again. */
+  reprocessPending: boolean;
 }
 
 /** Options for one agent turn. */
@@ -197,9 +201,10 @@ export class SkillAgent {
     };
   }
 
-  /** Rough total context size, in estimated tokens. */
+  /** Rough total context size, in estimated tokens — includes the system prompt
+   *  (sent as its own cached block), not just the message array. */
   contextTokens(): number {
-    let total = 0;
+    let total = this.cfg.system ? Math.ceil(this.cfg.system.length / 4) : 0;
     for (const m of this.messages) total += estimateMessageTokens(m);
     return total;
   }
@@ -287,7 +292,7 @@ export class SkillAgent {
       }
     }
 
-    return { items, cutIndex };
+    return { items, cutIndex, reprocessPending: this.pendingEdits !== undefined };
   }
 
   /** Run one user turn through the agentic tool loop. Requires an API key. */

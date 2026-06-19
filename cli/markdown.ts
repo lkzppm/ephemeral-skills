@@ -10,7 +10,7 @@
  * Scope is deliberately small (what Claude actually emits): headings, bold /
  * italic / inline-code / links / strikethrough, fenced code blocks, GFM pipe
  * tables, ordered + unordered lists, blockquotes, and horizontal rules. It is a
- * presentation helper for examples/ only — not part of the pure core.
+ * presentation helper for the cli/ showcase only — not part of the pure core.
  */
 
 export interface Seg {
