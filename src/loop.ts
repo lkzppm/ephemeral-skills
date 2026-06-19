@@ -244,7 +244,7 @@ export class SkillAgent {
     const client = this.getClient();
 
     const req: Record<string, unknown> = {
-      model: this.cfg.model ?? DEFAULT_MODEL,
+      model: this.cfg.model ?? process.env.ANTHROPIC_MODEL ?? DEFAULT_MODEL,
       max_tokens: this.cfg.maxTokens ?? DEFAULT_MAX_TOKENS,
       messages: buildAnthropicMessages(this.messages),
       tools: [
