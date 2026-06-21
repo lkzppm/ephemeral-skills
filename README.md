@@ -62,9 +62,12 @@ npm start
 ```
 
 `ephemeral` is a **strict gate**: `ephemeral:false` skills (personas, guardrails)
-can't be evicted by policy, by the model's `clear_skill` tool, or by an explicit
-target — only a human `--force`. The model may also call `clear_skill` itself when
-it decides it's done with an ephemeral skill.
+can't be evicted by policy or by an explicit target — only a human `--force`.
+Eviction is **deterministic and harness-driven** — the frontmatter `evict-after`
+trigger, the token threshold, and the human `/clear-skill`. There is no
+model-invocable clear tool; the model's only skill action is loading one with
+`invoke_skill`, mirroring `clear_tool_uses` (an automatic strategy, not a model
+button).
 
 **Cost harness** — run the inject → use → evict → tail scenario live, emit a CSV
 plus a predicted-vs-observed summary:
@@ -81,11 +84,11 @@ npm run harness            # default 6 tail turns;  TAIL=12 npm run harness
 |---|---|
 | `src/clearSkillUses.ts` | pure transform + cost gate (M1) |
 | `src/frontmatter.ts`, `src/skillLoader.ts` | parse SKILL.md frontmatter, load skills |
-| `src/tools/clearSkill.ts` | the model-invocable `clear_skill` tool |
+| `src/tools/invokeSkill.ts` | the `invoke_skill` tool (progressive disclosure — load a skill's full body on demand) |
 | `src/loop.ts` | `SkillAgent` — the SDK loop (injection, triggers, cache breakpoint, usage) |
 | `cli/cli.tsx` · `cli/costHarness.ts` | the `npm start` Ink TUI · the `npm run harness` |
 | `cli/markdown.ts` | Markdown → styled terminal rows for the TUI |
-| `agent/systemPrompt.ts` · `agent/skills/` | the demo agent's system prompt · its skills (2 ephemeral, 1 persona) |
+| `agent/systemPrompt.md` · `agent/skills/` | the demo agent's system prompt (Markdown) · its skills (2 ephemeral, 1 persona) |
 | `spec/` · [`CLAUDE.md`](CLAUDE.md) | spec ecosystem · contributor / agent router |
 
 ## Status

@@ -15,9 +15,10 @@ updated: 2026-06-17
   library. It ships with a reference CLI (`cli/cli.tsx`, `npm start`) that
   demonstrates injection → use → eviction with a live cache-usage panel.
 - **Layer B — native harness proposal (RFC).** The same selector implemented
-  inside the harness as a `context-management` strategy, plus frontmatter and the
-  model-invocable `clear_skill` tool. Specified in the RFC (M4), not implemented
-  here.
+  inside the harness as a `context-management` strategy, plus the `ephemeral`
+  frontmatter — automatic and threshold/frontmatter-driven, symmetric with
+  `clear_tool_uses` (no model-invocable tool). Specified in the RFC (M4), not
+  implemented here.
 
 ## The pure-core contract
 

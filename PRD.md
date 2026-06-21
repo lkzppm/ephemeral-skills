@@ -58,8 +58,10 @@ Two layers:
   transform over the `messages` array in an Agent SDK loop. Tags each skill block
   on injection, and on trigger rewrites it to a placeholder before the next send.
 - **Layer B — native harness proposal (RFC).** The same selector implemented inside
-  the harness as a `context-management` strategy, plus frontmatter and a first-class
-  model-invocable `clear_skill` tool. Specified here, not implemented in this repo.
+  the harness as a `context-management` strategy, plus the `ephemeral` frontmatter.
+  Automatic and threshold/frontmatter-driven, exactly symmetric with
+  `clear_tool_uses` — **no model-invocable tool** (§6). Specified here, not
+  implemented in this repo.
 
 ## 4. Identifying a skill block
 
@@ -102,12 +104,13 @@ needed the body. Stub length is configurable (`evict_keep_tokens`, default ≈ 3
 
 **The strict `ephemeral` gate governs all of them.** `ephemeral: false` (the
 default) means the skill is resident for the whole session and is **never** evicted
-— not by policy, not by the `clear_skill` tool, not by an explicit `target`. The
-only override is a deliberate human force (`--force`). Once the model can evict its
-own skills, this absolute floor is a safety property: it cannot drop a
-persona / guardrail skill mid-task.
+— not by policy, not by an explicit `target`. The only override is a deliberate
+human force (`--force`). This absolute floor is a safety property: nothing can drop
+a persona / guardrail skill mid-task.
 
-Three composable triggers, all subject to that gate:
+Eviction is **deterministic and harness-driven** — there is no model-invocable
+clear tool (see "Why not a model tool" below). Two automatic triggers, both
+subject to the gate, plus a manual surface:
 
 1. **Frontmatter, declarative (primary).**
    ```yaml
@@ -115,19 +118,27 @@ Three composable triggers, all subject to that gate:
    evict-after: used          # used | <N>-steps | <T>-tokens
    evict-keep-tokens: 30      # stub budget
    ```
-   `evict-after: used` = evict at the first request after the skill's output has
-   been consumed (recommended — minimizes the lived band X).
-2. **The `clear_skill` model tool (first-class).** Expose `clear_skill(skill_name)`
-   so the model can drop a skill when it decides it's done (matches #21583's Blender
-   example). It resolves the name to its `invocationId` and calls the core with
-   `target`, never `force`; refused on `ephemeral: false`. Gate behind a
-   `disable-model-invocation`-style opt-in.
-3. **Threshold, automatic.** Like `clear_tool_uses`, fire when context crosses a
+   `evict-after: used` = evict as soon as the turn that consumes the skill ends
+   (recommended — minimizes the lived band X). The reference loop applies it
+   deterministically at the end of the using turn; the reprocess lands on the next
+   request.
+2. **Threshold, automatic.** Like `clear_tool_uses`, fire when context crosses a
    token threshold, evicting ephemeral skills oldest-first (cost-gated). Excludable
    per skill.
 
 A manual surface — `/clear-skill <name>` (and `/clear-skill <name> --force`, the
 human override) — is provided in the reference CLI (§7).
+
+**Why not a model tool.** `clear_skill_uses` is the skill analogue of
+`clear_tool_uses_20250919`, and that mechanism is a *context-management strategy*
+applied automatically by the harness — never a tool the model calls. The faithful
+analogue is therefore the two automatic triggers above, not a model-driven button.
+An earlier draft proposed a first-class `clear_skill(skill_name)` tool for agentic
+self-pruning; it was dropped because it has no counterpart in `clear_tool_uses`, it
+fires at the wrong time in practice (mid-turn, before the using turn finishes, or
+redundantly on a skill the frontmatter trigger already owns), and it adds no
+coverage the deterministic triggers lack. The model's only skill action is loading
+one with `invoke_skill`.
 
 ## 7. Delivery surfaces
 
@@ -158,8 +169,8 @@ The eviction request breaks the cached prefix at the stub. Implementation MUST:
 ## 9. Edge cases & interactions
 
 - **Behavioral skills:** `ephemeral` defaults false and is a **strict gate** — never
-  evicted by policy, the `clear_skill` tool, or an explicit target; only a deliberate
-  human `--force` overrides (so the model cannot drop its own guardrails).
+  evicted by policy or an explicit target; only a deliberate human `--force`
+  overrides (so a persona / guardrail skill can never be dropped mid-task).
 - **Compaction interaction (important):** auto-compaction re-attaches recent skills.
   An *intentionally* evicted skill MUST be marked so compaction does **not**
   resurrect it. Add an `evicted` flag to the skill's side-table entry; compaction
@@ -179,8 +190,8 @@ The eviction request breaks the cached prefix at the stub. Implementation MUST:
   tagged skill block to a stub, preserves all else, returns `applied_edits`. Pure
   function, no network. (`src/clearSkillUses.ts`, `tests/`)
 - **M2 — Frontmatter + triggers + loop.** Parse `ephemeral`/`evict-after`/
-  `evict-keep-tokens`; the first-class `clear_skill` model tool; wire `evict-after:
-  used` and threshold triggers into an Agent SDK loop; ship the reference CLI
+  `evict-keep-tokens`; wire the deterministic `evict-after: used` and threshold
+  triggers into an Agent SDK loop (no model clear tool); ship the reference CLI
   (`npm start`).
 - **M3 — Empirical cost harness.** Real API calls with prompt caching on; record
   `usage.cache_read_input_tokens` / `cache_creation_input_tokens` before/after to
@@ -206,12 +217,15 @@ The eviction request breaks the cached prefix at the stub. Implementation MUST:
 
 **Resolved**
 - **Does an explicit `target` override `ephemeral: false`?** No. `ephemeral` is a
-  strict gate (§6): policy, the `clear_skill` tool, and explicit targets all respect
-  it; only a human `--force` overrides. Rationale: the model must not be able to drop
-  its own persona / guardrail skills.
-- **Deterministic vs model-driven?** Both, composable: frontmatter `evict-after` is
-  primary; the `clear_skill` tool is first-class for model-decided drops; threshold is
-  the automatic backstop.
+  strict gate (§6): policy and explicit targets both respect it; only a human
+  `--force` overrides. Rationale: a persona / guardrail skill must never be dropped
+  mid-task.
+- **Deterministic vs model-driven?** Deterministic only. Frontmatter `evict-after`
+  is primary; threshold is the automatic backstop; the human `/clear-skill` is the
+  manual override. A model-invocable `clear_skill` tool was considered and dropped
+  (§6, "Why not a model tool") — `clear_tool_uses` has no model-invoked mode, and in
+  practice the model fires it at the wrong time and adds no coverage the
+  deterministic triggers lack.
 - **Manual surface?** A `/clear-skill <name>` slash command (with `--force`) in the
   reference CLI (§7).
 - **Default `evict-after` when `ephemeral: true` but unspecified** — `used` (minimizes

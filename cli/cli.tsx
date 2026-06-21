@@ -8,11 +8,11 @@
  *    works mid-sentence; Tab writes the completion, Enter writes-and-sends.
  *  - `/skills` opens an interactive picker; Esc twice quits.
  *
- * Its only job is to make eviction legible: watch a fat skill enter context, get
- * used, then get evicted, and the per-turn cache_read meter drop. The same slash
- * commands drive deterministic injection / eviction; any other input is a normal
- * agent turn. A `/skill-name` mentioned inside an agent turn is injected for that
- * turn (mention → inject), so skills can be invoked mid-sentence.
+ * Its only job is to make the mechanism legible: the agent always sees a one-line
+ * summary of every skill, loads a skill's full SKILL.md on demand via invoke_skill,
+ * then it gets evicted — and the per-turn cache meter drops. Slash commands and a
+ * mentioned `/skill-name` just *suggest* a skill (summary only); the agent decides
+ * whether to invoke it. `/clear-skill` evicts; any other input is a normal turn.
  *
  * Run with:  npm start   (or: tsx cli/cli.tsx)
  * Requires:  ANTHROPIC_API_KEY for agent.send() — put it in .env (auto-loaded) or
@@ -24,23 +24,49 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { render, Box, Text, measureElement, useApp, useInput, useWindowSize, type DOMElement } from "ink";
 import { Spinner } from "@inkjs/ui";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import {
   SkillAgent,
   loadSkills,
   type LoadedSkill,
   type UsageRecord,
   type StackItem,
-  type StackStepKind,
+  type AppliedEdits,
 } from "../src/index";
 import { renderMarkdown, type Seg } from "./markdown";
-import { SYSTEM_PROMPT } from "../agent/systemPrompt";
+import {
+  type Entry,
+  type EntryKind,
+  type SavedConversation,
+  saveConversation,
+  listConversations,
+  slugify,
+  turnCount,
+} from "./conversations";
 
 // ---------------------------------------------------------------------------
-// Skill discovery (the agent's skills live in agent/skills) + shared config.
+// Agent definition (lives under agent/): the system prompt + the skills.
+// The prompt is plain Markdown; a leading <!-- … --> maintainer note is stripped
+// before it's sent to the model.
 // ---------------------------------------------------------------------------
+const SYSTEM_PROMPT = readFileSync(
+  fileURLToPath(new URL("../agent/systemPrompt.md", import.meta.url)),
+  "utf-8",
+)
+  .replace(/^<!--[\s\S]*?-->\s*/, "")
+  .trim();
+
 const skillsDir = fileURLToPath(new URL("../agent/skills", import.meta.url));
 const skills = loadSkills(skillsDir);
 const skillNames = skills.map((s) => s.name);
+
+// The model the agent actually sends — same resolution as SkillAgent.callModel
+// (`cfg.model ?? ANTHROPIC_MODEL ?? DEFAULT_MODEL`); the CLI passes no cfg.model.
+const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-opus-4-8";
+const ORANGE = "#ff8800";
+// Vibrant green for the `fresh` token series — ANSI `green` (color 2) renders too
+// dark on most terminals to read apart from `cached` blue.
+const FRESH_GREEN = "#3aff7a";
 
 const KNOWN_COMMANDS = new Set([
   "help",
@@ -49,6 +75,8 @@ const KNOWN_COMMANDS = new Set([
   "clear-skill",
   "usage",
   "context",
+  "save",
+  "resume",
   "quit",
   "exit",
 ]);
@@ -59,6 +87,8 @@ const COMMAND_TOKENS = [
   "/skills",
   "/usage",
   "/context",
+  "/save",
+  "/resume",
   "/use",
   "/clear-skill",
   "/quit",
@@ -70,7 +100,9 @@ const COMMAND_DESC: Record<string, string> = {
   "/skills": "interactive skill picker",
   "/usage": "per-turn cache usage",
   "/context": "context stats",
-  "/use": "inject a skill",
+  "/save": "save this conversation <name>",
+  "/resume": "reopen a saved conversation",
+  "/use": "suggest a skill (summary only)",
   "/clear-skill": "evict a skill",
   "/quit": "quit",
   "/exit": "quit",
@@ -80,15 +112,8 @@ const MENU_LIMIT = 5;
 const PLACEHOLDER = "message, or /command";
 
 // ---------------------------------------------------------------------------
-// Transcript model
+// Transcript model — Entry / EntryKind / the on-disk format live in ./conversations.
 // ---------------------------------------------------------------------------
-type EntryKind = "user" | "assistant" | "system" | "usage" | "error";
-interface Entry {
-  id: number;
-  kind: EntryKind;
-  text: string;
-}
-
 interface Stats {
   skillCount: number;
   activeSkills: number;
@@ -256,6 +281,25 @@ function flattenTranscript(transcript: Entry[], width: number): VisualLine[] {
   return out;
 }
 
+/** The chat line announcing a model invocation (full SKILL.md loaded into context). */
+function skillInvokeText(name: string): string {
+  const sk = skills.find((s) => s.name === name);
+  if (!sk) return `◆ invoked ${name}`;
+  const kind = sk.frontmatter.ephemeral ? "ephemeral" : "persona";
+  return `◆ invoked ${name} · loaded SKILL.md (~${sk.tokenLen} tok · ${kind})`;
+}
+
+/** The chat line for a human suggestion — only the summary is sent; the agent
+ *  decides whether to invoke_skill for the full body. */
+function skillSuggestText(name: string, mentioned = false): string {
+  const sk = skills.find((s) => s.name === name);
+  if (!sk) return `◆ suggested ${name}`;
+  return (
+    `◆ suggested ${name} · summary only — the agent can invoke_skill to load the full SKILL.md (~${sk.tokenLen} tok)` +
+    (mentioned ? " · mentioned" : "")
+  );
+}
+
 /** Column header for the picker / banner table (same widths as `skillRow`). */
 const SKILL_HEAD = "name".padEnd(22) + "ephemeral".padEnd(11) + "tokenLen".padEnd(12) + "evictAfter";
 
@@ -278,14 +322,17 @@ function helpText(): string {
     "Commands:",
     "  /help                          show this list",
     "  /skills                        interactive skill picker (↑/↓ · Enter)",
-    "  /use <name>  ·  /<name>        inject a skill into context",
-    "  /clear-skill <name> [--force]  evict a skill from context",
+    "  /use <name>  ·  /<name>        suggest a skill (sends its summary; the agent invokes it)",
+    "  /clear-skill <name> [--force]  evict a loaded skill from context",
     "  /usage                         per-turn cache usage log",
     "  /context                       current context stats",
+    "  /save <name>                   save this conversation to conversations/",
+    "  /resume                        reopen a saved conversation (↑/↓ · Enter)",
     "  /quit  ·  /exit                quit  (also Esc Esc, Ctrl+C / Ctrl+D)",
     "",
-    "Any other input is an agent turn. A /skill-name mentioned in it is injected",
-    "for that turn (needs ANTHROPIC_API_KEY).",
+    "The agent always sees a one-line summary of every skill and loads a skill's full",
+    "SKILL.md on demand via invoke_skill. /use and a mentioned /skill-name just suggest",
+    "one (summary only); the agent decides whether to invoke it (needs ANTHROPIC_API_KEY).",
   ].join("\n");
 }
 
@@ -294,44 +341,9 @@ function skillsTableText(list: LoadedSkill[]): string {
   return [SKILL_HEAD, "-".repeat(58), ...list.map(skillRow)].join("\n");
 }
 
-function formatUsage(u: UsageRecord): string {
-  let line =
-    `[${u.step}] cached=${u.cacheReadTokens} fresh=${u.cacheCreationTokens}` +
-    ` in=${u.inputTokens} out=${u.outputTokens}`;
-  if (u.appliedEdits) {
-    const e = u.appliedEdits;
-    line += ` | evicted=${e.skillsEvicted} freed≈${e.tokensFreed} reprocess≈${e.tokensReprocessed}`;
-  }
-  return line;
-}
-
-function usageLogText(log: UsageRecord[]): string {
-  if (log.length === 0) return "(no usage recorded yet — send a message first)";
-  return [
-    "-- usage panel --",
-    ...log.map(formatUsage),
-    "hint: after eviction `cached` drops on later turns (fewer tokens re-read) — that gap is the payoff.",
-  ].join("\n");
-}
-
-function contextStatsText(agent: SkillAgent): string {
-  const stats = agent.contextStats();
-  const lines = [`messages: ${stats.messageCount}  estimated_tokens: ${stats.estimatedTokens}`];
-  if (stats.skills.length === 0) {
-    lines.push("  no skills in context");
-  } else {
-    lines.push("  " + "skill".padEnd(24) + "ephemeral".padEnd(12) + "evicted".padEnd(10) + "tokenLen");
-    for (const sk of stats.skills) {
-      lines.push(
-        "  " +
-          String(sk.name).padEnd(24) +
-          String(sk.ephemeral).padEnd(12) +
-          String(sk.evicted).padEnd(10) +
-          String(sk.tokenLen),
-      );
-    }
-  }
-  return lines.join("\n");
+/** Exact integer with thousands separators (e.g. 5332 -> "5,332"). */
+function fmtInt(n: number): string {
+  return n.toLocaleString("en-US");
 }
 
 function computeStats(agent: SkillAgent): Stats {
@@ -373,9 +385,9 @@ function chipStyle(item: StackItem): { bg: string; fg: string; dim?: boolean } {
   }
 }
 
-const STEP_GLYPH: Record<StackStepKind, { g: string; fg: string; bold?: boolean }> = {
-  tool: { g: "▸", fg: "black" },
-  wipe: { g: "✂", fg: "white", bold: true },
+// Only the answer square is drawn on AI chips; tool steps are showcase noise and
+// are filtered out before rendering (see chipCells).
+const STEP_GLYPH: Record<"answer", { g: string; fg: string; bold?: boolean }> = {
   answer: { g: "■", fg: "black" },
 };
 
@@ -388,7 +400,8 @@ function chipCells(item: StackItem, draft: boolean): Seg[] {
 
   if (item.kind === "ai") {
     const cells: Seg[] = [{ ...base, text: ` ${item.label} ` }];
-    const steps = item.steps ?? [];
+    // Tool steps are dropped — only the final-answer square is shown.
+    const steps = (item.steps ?? []).filter((s): s is "answer" => s === "answer");
     if (draft && steps.length === 0) {
       cells.push({ ...base, text: "⋯" });
     } else {
@@ -414,8 +427,12 @@ const cellsWidth = (cells: Seg[]): number => cells.reduce((a, c) => a + c.text.l
 
 /** The rule-row segment under one chip: solid `═` for the cached prefix, `✂`
  *  centered at the re-link cut, dashed `╌` for the tail still owing its one-time
- *  reprocess (only while `pending`), dotted `┄` for the block written this turn.
- *  Once the reprocess settles the tail re-caches, so it returns to blue `═`. */
+ *  reprocess (only while `pending`), dotted `┄` for the frontier block.
+ *  The last chip is always **fresh** (`┄`): it's the answer just generated (model
+ *  output) or a just-typed message — it has never been sent to the API as input,
+ *  so it was never cached and cannot be "rebuilt". Only blocks that *were* in the
+ *  warm cache before the cut show the rebuilt `╌`; once the reprocess settles they
+ *  re-cache to blue `═`. */
 function ruleSeg(idx: number, isLast: boolean, cutIndex: number | null, pending: boolean, w: number): Seg {
   const cached: Seg = { text: "═".repeat(w), color: "blue" };
   const fresh: Seg = { text: "┄".repeat(w), color: "cyan", dim: true };
@@ -427,8 +444,9 @@ function ruleSeg(idx: number, isLast: boolean, cutIndex: number | null, pending:
       return { text: fill.repeat(left) + "✂" + fill.repeat(Math.max(0, w - left - 1)), color: "red" };
     }
     if (idx > cutIndex) {
+      if (isLast) return fresh; // the frontier was never cached — fresh, not rebuilt
       if (pending) return { text: "╌".repeat(w), color: "yellow" };
-      return isLast ? fresh : cached; // re-cached after the reprocess settled
+      return cached; // re-cached after the reprocess settled
     }
     return cached; // idx < cutIndex — always warm
   }
@@ -439,6 +457,23 @@ interface Chip {
   idx: number;
   cells: Seg[];
   w: number;
+  tokens: number;
+}
+
+/** Compact token count for the visualizer's per-block token row (e.g. 5029 ->
+ *  "5k", 1240 -> "1.2k", 340 -> "340"). */
+function tokenLabel(n: number): string {
+  if (n >= 10000) return `${Math.round(n / 1000)}k`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  return String(n);
+}
+
+/** Center `s` within width `w` (truncating if it doesn't fit). */
+function centerIn(s: string, w: number): string {
+  if (s.length >= w) return s.slice(0, w);
+  const pad = w - s.length;
+  const left = Math.floor(pad / 2);
+  return " ".repeat(left) + s + " ".repeat(pad - left);
 }
 
 function ContextStack({
@@ -473,13 +508,14 @@ function ContextStack({
       <Box flexDirection="column">
         <Text> </Text>
         <Text dimColor>{"┄".repeat(inner)}</Text>
+        <Text> </Text>
       </Box>
     );
   }
 
   const chips: Chip[] = display.map((d) => {
     const cells = chipCells(d.item, d.draft);
-    return { idx: d.idx, cells, w: cellsWidth(cells) };
+    return { idx: d.idx, cells, w: cellsWidth(cells), tokens: d.item.tokens };
   });
 
   // Keep the most recent chips; collapse the (warm) older ones into a summary.
@@ -506,17 +542,24 @@ function ContextStack({
   const summaryRebuilt = reprocessPending && cutIndex !== null && cutIndex < start;
   const summaryChip: Chip | null =
     hidden > 0
-      ? { idx: -1, cells: [{ text: ` ‹${hidden} `, bg: "gray", color: "white", dim: true }], w: `‹${hidden}`.length + 2 }
+      ? {
+          idx: -1,
+          cells: [{ text: ` ‹${hidden} `, bg: "gray", color: "white", dim: true }],
+          w: `‹${hidden}`.length + 2,
+          tokens: chips.slice(0, start).reduce((a, c) => a + c.tokens, 0),
+        }
       : null;
 
   const chipRow: React.ReactNode[] = [];
   const ruleRow: React.ReactNode[] = [];
+  const tokenRow: React.ReactNode[] = [];
   let key = 0;
 
   const pushChip = (c: Chip, rule: Seg, gapBefore: boolean) => {
     if (gapBefore) {
       chipRow.push(<Text key={`g${key}`}> </Text>);
       ruleRow.push(<Text key={`gr${key}`}> </Text>);
+      tokenRow.push(<Text key={`gt${key}`}> </Text>);
     }
     chipRow.push(
       <Text key={`c${key}`}>
@@ -530,6 +573,11 @@ function ContextStack({
     ruleRow.push(
       <Text key={`r${key}`} color={rule.color} dimColor={rule.dim}>
         {rule.text}
+      </Text>,
+    );
+    tokenRow.push(
+      <Text key={`t${key}`} dimColor>
+        {centerIn(tokenLabel(c.tokens), c.w)}
       </Text>,
     );
     key++;
@@ -550,14 +598,14 @@ function ContextStack({
     <Box flexDirection="column">
       <Text wrap="truncate-start">{chipRow}</Text>
       <Text wrap="truncate-start">{ruleRow}</Text>
+      <Text wrap="truncate-start">{tokenRow}</Text>
     </Box>
   );
 }
 
 const STEP_LEGEND: [string, string, string][] = [
   ["■", "green", "answer"],
-  ["▸", "white", "tool"],
-  ["✂", "red", "wipe"],
+  ["✂", "red", "cut"],
   ["═", "blue", "cached"],
   ["╌", "yellow", "rebuilt"],
 ];
@@ -630,7 +678,7 @@ function Counters({ stats, width }: { stats: Stats; width: number }) {
         <Text dimColor>{"   "}</Text>
         <Counter label="cached" value={`${stats.lastRead}`} color="blue" />
         <Text dimColor>{"   "}</Text>
-        <Counter label="fresh" value={`${stats.lastCreation}`} color="cyan" />
+        <Counter label="fresh" value={`${stats.lastCreation}`} color={FRESH_GREEN} />
         <Text dimColor>{"   "}</Text>
         <Counter label="freed" value={`${stats.totalFreed}`} color="magenta" />
       </Box>
@@ -702,6 +750,12 @@ function VisualLineView({ line, width }: { line: VisualLine; width: number }) {
         </Text>
       );
     }
+    case "skill":
+      return (
+        <Text color="yellow" bold={line.first}>
+          {line.text || " "}
+        </Text>
+      );
     case "system":
       return <Text color="cyan">{line.text || " "}</Text>;
     case "usage":
@@ -792,7 +846,7 @@ function CommandInput({
     const m = computeMatches(v, cursorRef.current);
     if (m.matches.length === 0) return null;
     const item = m.matches[Math.min(selRef.current, m.matches.length - 1)]!;
-    const needsArg = item === "/use" || item === "/clear-skill";
+    const needsArg = item === "/use" || item === "/clear-skill" || item === "/save";
     const insert = needsArg ? `${item} ` : item;
     return { value: v.slice(0, m.start) + insert + v.slice(m.end), needsArg };
   };
@@ -909,6 +963,17 @@ function CommandInput({
     );
   }
 
+  // Carousel: a MENU_LIMIT-sized window that scrolls to keep the highlighted row
+  // visible (the selection is centered, clamped to the list ends), with ↑/↓ hints
+  // for the hidden remainder.
+  const menuTotal = matches.length;
+  const menuStart =
+    menuTotal > MENU_LIMIT
+      ? Math.max(0, Math.min(selClamped - Math.floor(MENU_LIMIT / 2), menuTotal - MENU_LIMIT))
+      : 0;
+  const menuEnd = Math.min(menuTotal, menuStart + MENU_LIMIT);
+  const menuWindow = matches.slice(menuStart, menuEnd);
+
   return (
     <Box flexDirection="column">
       {value === "" ? (
@@ -926,8 +991,9 @@ function CommandInput({
 
       {value !== "" && matches.length > 0 ? (
         <Box flexDirection="column" paddingX={1}>
-          {matches.slice(0, MENU_LIMIT).map((m, i) => {
-            const isSel = i === selClamped;
+          {menuStart > 0 ? <Text dimColor>{`  ↑ ${menuStart} more`}</Text> : null}
+          {menuWindow.map((m, i) => {
+            const isSel = menuStart + i === selClamped;
             const desc = describeItem(m);
             return (
               <Text key={m}>
@@ -940,16 +1006,14 @@ function CommandInput({
               </Text>
             );
           })}
-          {matches.length > MENU_LIMIT ? (
-            <Text dimColor>{`  …and ${matches.length - MENU_LIMIT} more`}</Text>
-          ) : null}
+          {menuEnd < menuTotal ? <Text dimColor>{`  ↓ ${menuTotal - menuEnd} more`}</Text> : null}
         </Box>
       ) : null}
     </Box>
   );
 }
 
-/** Interactive `/skills` picker — ↑/↓ navigate, Enter injects, Esc cancels. */
+/** Interactive `/skills` picker — ↑/↓ navigate, Enter suggests, Esc cancels. */
 function SkillsMenu({ onPick, onCancel }: { onPick: (name: string) => void; onCancel: () => void }) {
   const [idx, setIdxState] = useState(0);
   const idxRef = useRef(0);
@@ -972,7 +1036,7 @@ function SkillsMenu({ onPick, onCancel }: { onPick: (name: string) => void; onCa
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
       <Text color="cyan" bold>
-        skills · ↑/↓ select · Enter inject · Esc cancel
+        skills · ↑/↓ select · Enter suggest · Esc cancel
       </Text>
       {skills.length === 0 ? (
         <Text dimColor>(no skills loaded)</Text>
@@ -992,39 +1056,12 @@ function SkillsMenu({ onPick, onCancel }: { onPick: (name: string) => void; onCa
   );
 }
 
-type OverlayKind = "help" | "usage" | "context";
+type OverlayKind = "help" | "usage" | "context" | "resume";
 
-const OVERLAY_TITLE: Record<OverlayKind, string> = {
-  help: "help · commands",
-  usage: "usage · per-turn cache",
-  context: "context · blocks in window",
-};
-
-function overlayLines(kind: OverlayKind, agent: SkillAgent): string[] {
-  switch (kind) {
-    case "help":
-      return helpText().split("\n");
-    case "usage":
-      return usageLogText(agent.usageLog).split("\n");
-    case "context":
-      return contextStatsText(agent).split("\n");
-  }
-}
-
-/** A modal info panel (like the skills picker) for /help, /usage, /context —
- *  scrollable with ↑/↓ · PageUp/Dn, dismissed with Esc / Enter / q. */
-function InfoPanel({
-  kind,
-  agent,
-  rows,
-  onClose,
-}: {
-  kind: OverlayKind;
-  agent: SkillAgent;
-  rows: number;
-  onClose: () => void;
-}) {
-  const lines = overlayLines(kind, agent);
+/** A modal info panel for /help — scrollable with ↑/↓ · PageUp/Dn, dismissed
+ *  with Esc / Enter / q. (/usage, /context, /resume have dedicated panels.) */
+function InfoPanel({ rows, onClose }: { rows: number; onClose: () => void }) {
+  const lines = helpText().split("\n");
   const maxVisible = Math.max(3, Math.min(lines.length, rows - 11));
   const maxOff = Math.max(0, lines.length - maxVisible);
 
@@ -1048,13 +1085,357 @@ function InfoPanel({
   const visible = lines.slice(start, start + maxVisible);
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
-      <Text color="cyan" bold>{`${OVERLAY_TITLE[kind]} · ↑/↓ scroll · Esc close`}</Text>
+      <Text color="cyan" bold>{`help · commands · ↑/↓ scroll · Esc close`}</Text>
       {visible.map((l, i) => (
         <Text key={i}>{l || " "}</Text>
       ))}
       {lines.length > maxVisible ? (
         <Text dimColor>{`  ${start + 1}–${start + visible.length} of ${lines.length}`}</Text>
       ) : null}
+    </Box>
+  );
+}
+
+const clampN = (lo: number, hi: number, n: number) => Math.max(lo, Math.min(hi, n));
+
+interface ChartCell {
+  ch: string;
+  color?: string;
+  dim?: boolean;
+  bold?: boolean;
+}
+
+/** The three plotted token series for one usage record. `total` is the full
+ *  input (context) size that turn — the envelope eviction shrinks. */
+function seriesOf(u: UsageRecord): { cached: number; fresh: number; total: number } {
+  const cached = u.cacheReadTokens;
+  const fresh = u.cacheCreationTokens;
+  return { cached, fresh, total: cached + fresh + u.inputTokens };
+}
+
+const USAGE_SERIES: { key: "total" | "cached" | "fresh"; color: string; label: string }[] = [
+  { key: "total", color: "white", label: "total" },
+  { key: "cached", color: "blue", label: "cached" },
+  { key: "fresh", color: FRESH_GREEN, label: "fresh" },
+];
+
+/** /usage — a left detail pane for the selected turn + a right token-vs-turn
+ *  chart (total/cached/fresh markers, a cursor column). ↑/↓ (or ←/→) move the
+ *  cursor between turns; Esc / Enter / q close. */
+function UsagePanel({
+  agent,
+  width,
+  rows,
+  onClose,
+}: {
+  agent: SkillAgent;
+  width: number;
+  rows: number;
+  onClose: () => void;
+}) {
+  const log = agent.usageLog;
+  const n = log.length;
+  const [cur, setCurState] = useState(Math.max(0, n - 1));
+  const curRef = useRef(cur);
+  const setCur = (i: number) => {
+    const c = clampN(0, Math.max(0, n - 1), i);
+    curRef.current = c;
+    setCurState(c);
+  };
+
+  useInput((input, key) => {
+    if (key.escape || key.return || input === "q") return onClose();
+    if (key.upArrow || key.leftArrow) return setCur(curRef.current - 1);
+    if (key.downArrow || key.rightArrow) return setCur(curRef.current + 1);
+  });
+
+  if (n === 0) {
+    return (
+      <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+        <Text color="cyan" bold>usage · per-turn cache · Esc close</Text>
+        <Text dimColor>(no usage recorded yet — send a message first)</Text>
+      </Box>
+    );
+  }
+
+  const inner = Math.max(28, width - 4);
+  const DETAIL_W = 22;
+  const Y_LABEL_W = 5;
+  const GAP = 2;
+  const chartW = Math.max(14, inner - DETAIL_W - GAP);
+  const plotCols = Math.max(6, chartW - Y_LABEL_W - 1);
+  const H = clampN(7, 14, rows - 13);
+
+  // Window the turns so the latest fit, keeping the cursor in view. We can show
+  // up to `plotCols` turns; with fewer, they spread across the full plot width.
+  const visibleCount = Math.min(n, plotCols);
+  let w0 = n - visibleCount;
+  if (cur < w0) w0 = cur;
+  if (cur >= w0 + visibleCount) w0 = cur - visibleCount + 1;
+  w0 = Math.max(0, w0);
+
+  const vis = log.slice(w0, w0 + visibleCount).map(seriesOf);
+  const maxVal = Math.max(1, ...vis.map((p) => p.total));
+  const rowOf = (v: number) => clampN(0, H - 1, Math.round((1 - v / maxVal) * (H - 1)));
+  // Spread the visible turns evenly across the FULL plot width.
+  const xOf = (j: number) =>
+    visibleCount <= 1 ? Math.floor(plotCols / 2) : Math.round((j * (plotCols - 1)) / (visibleCount - 1));
+  const cursorX = xOf(cur - w0);
+
+  // Turns where an eviction settled — the request that paid the reprocess. Its
+  // `freed` tokens are why total context drops and `fresh` spikes here, so mark
+  // the column with a scissor + a faint red guide.
+  const evictXs = new Set<number>();
+  for (let j = 0; j < visibleCount; j++) {
+    if ((log[w0 + j]?.appliedEdits?.tokensFreed ?? 0) > 0) evictXs.add(xOf(j));
+  }
+
+  // Build the H×plotCols grid (top row = maxVal, bottom = 0). Lines & points go
+  // down first; the eviction + cursor guides then fill only BLANK cells, so the
+  // data stays intact.
+  const grid: ChartCell[][] = Array.from({ length: H }, () =>
+    Array.from({ length: plotCols }, () => ({ ch: " " } as ChartCell)),
+  );
+  // 1) Dotted connectors between consecutive turns, per series — a line feel.
+  for (const ser of USAGE_SERIES) {
+    for (let j = 0; j < visibleCount - 1; j++) {
+      const x0 = xOf(j);
+      const x1 = xOf(j + 1);
+      const r0 = rowOf(vis[j]![ser.key]);
+      const r1 = rowOf(vis[j + 1]![ser.key]);
+      for (let x = x0; x <= x1; x++) {
+        const t = x1 === x0 ? 0 : (x - x0) / (x1 - x0);
+        const r = Math.round(r0 + (r1 - r0) * t);
+        if (grid[r]![x]!.ch === " ") grid[r]![x] = { ch: "·", color: ser.color, dim: true };
+      }
+    }
+  }
+  // 2) Markers on top of the lines.
+  vis.forEach((p, j) => {
+    const x = xOf(j);
+    const isCur = j === cur - w0;
+    for (const ser of USAGE_SERIES) {
+      grid[rowOf(p[ser.key])]![x] = { ch: "●", color: ser.color, bold: isCur };
+    }
+  });
+  // 3) Eviction guides (red), then the cursor guide (gray) — blank cells only.
+  for (const x of evictXs) {
+    for (let r = 0; r < H; r++) if (grid[r]![x]!.ch === " ") grid[r]![x] = { ch: "╎", color: "red", dim: true };
+  }
+  for (let r = 0; r < H; r++) {
+    if (grid[r]![cursorX]!.ch === " ") grid[r]![cursorX] = { ch: "┊", color: "gray", dim: true };
+  }
+
+  // Axis: scissors flag the eviction turns; the arrow tracks the cursor turn.
+  const baseCells: ChartCell[] = Array.from({ length: plotCols }, () => ({ ch: "─", dim: true }));
+  for (const x of evictXs) baseCells[x] = { ch: "✂", color: "red" };
+
+  // Selected-turn detail.
+  const u = log[cur]!;
+  const p = seriesOf(u);
+  const freed = u.appliedEdits?.tokensFreed ?? 0;
+  const reproc = u.appliedEdits?.tokensReprocessed ?? 0;
+  const detail: { label: string; value: string; color: string }[] = [
+    { label: "cached", value: fmtInt(p.cached), color: "blue" },
+    { label: "fresh", value: fmtInt(p.fresh), color: FRESH_GREEN },
+    { label: "freed", value: freed ? fmtInt(freed) : "—", color: "magenta" },
+    { label: "total", value: fmtInt(p.total), color: "white" },
+    { label: "in/out", value: `${fmtInt(u.inputTokens)}/${fmtInt(u.outputTokens)}`, color: "gray" },
+  ];
+
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text color="cyan" bold>{`usage · per-turn cache · ↑/↓ select turn · Esc close`}</Text>
+      <Box flexDirection="row" marginTop={1}>
+        <Box flexDirection="column" width={DETAIL_W}>
+          <Text>
+            <Text bold>{`turn ${cur + 1}`}</Text>
+            <Text dimColor>{`/${n}`}</Text>
+            <Text dimColor>{`  step ${u.step}`}</Text>
+          </Text>
+          {detail.map((d) => (
+            <Text key={d.label}>
+              <Text color={d.color}>{d.label.padEnd(7)}</Text>
+              <Text>{d.value}</Text>
+            </Text>
+          ))}
+          {reproc ? <Text dimColor>{`reproc  ${fmtInt(reproc)}`}</Text> : null}
+        </Box>
+        <Box flexDirection="column" marginLeft={GAP}>
+          {grid.map((rowCells, r) => (
+            <Text key={r}>
+              <Text dimColor>
+                {(r === 0 ? tokenLabel(maxVal) : r === H - 1 ? "0" : "").padStart(Y_LABEL_W)}
+              </Text>
+              <Text dimColor>│</Text>
+              {rowCells.map((c, j) => (
+                <Text key={j} color={c.color} dimColor={c.dim} bold={c.bold}>
+                  {c.ch}
+                </Text>
+              ))}
+            </Text>
+          ))}
+          <Text>
+            <Text dimColor>{`${" ".repeat(Y_LABEL_W)}└`}</Text>
+            {baseCells.map((cc, x) => (
+              <Text key={x} color={cc.color} dimColor={cc.dim}>
+                {cc.ch}
+              </Text>
+            ))}
+          </Text>
+          <Text>
+            <Text>{" ".repeat(Y_LABEL_W + 1 + Math.max(0, cursorX))}</Text>
+            <Text color="magenta">▲</Text>
+          </Text>
+        </Box>
+      </Box>
+      <Text>
+        {USAGE_SERIES.map((ser, i) => (
+          <Text key={ser.key}>
+            {i > 0 ? "  " : ""}
+            <Text color={ser.color}>●</Text>
+            <Text dimColor>{` ${ser.label}`}</Text>
+          </Text>
+        ))}
+        <Text>{"  "}</Text>
+        <Text color="red">✂</Text>
+        <Text dimColor> evicted</Text>
+        <Text dimColor>{`   x: turns ${w0 + 1}–${w0 + visibleCount} · y: tokens`}</Text>
+      </Text>
+    </Box>
+  );
+}
+
+const CTX_BUCKETS: { key: StackItem["kind"]; label: string; color: string }[] = [
+  { key: "system", label: "system", color: "magenta" },
+  { key: "skill", label: "skills", color: "yellow" },
+  { key: "user", label: "you", color: "blue" },
+  { key: "ai", label: "AI", color: "green" },
+];
+
+/** /context — one proportional bar of the live window's token share by message
+ *  kind, plus a per-kind legend with absolute tokens + %. Esc / Enter / q close. */
+function ContextPanel({
+  agent,
+  width,
+  onClose,
+}: {
+  agent: SkillAgent;
+  width: number;
+  onClose: () => void;
+}) {
+  useInput((input, key) => {
+    if (key.escape || key.return || input === "q") return onClose();
+  });
+
+  const items = agent.contextStack().items;
+  const totals = CTX_BUCKETS.map((b) => ({
+    ...b,
+    tokens: items.filter((it) => it.kind === b.key).reduce((a, it) => a + it.tokens, 0),
+  }));
+  const grand = Math.max(1, totals.reduce((a, t) => a + t.tokens, 0));
+  const msgCount = agent.contextStats().messageCount;
+
+  // Largest-remainder apportionment so the bar fills exactly `barW` cells.
+  const barW = Math.max(20, width - 4);
+  const raw = totals.map((t) => (t.tokens / grand) * barW);
+  const cells = raw.map((v) => Math.floor(v));
+  let used = cells.reduce((a, c) => a + c, 0);
+  const order = raw
+    .map((v, i) => ({ i, frac: v - Math.floor(v) }))
+    .sort((a, b) => b.frac - a.frac);
+  for (let k = 0; used < barW && k < order.length; k++, used++) cells[order[k]!.i]!++;
+  // Any non-zero bucket gets at least one cell (borrow from the widest).
+  totals.forEach((t, i) => {
+    if (t.tokens > 0 && cells[i] === 0) {
+      const big = cells.indexOf(Math.max(...cells));
+      if (cells[big]! > 1) {
+        cells[big]!--;
+        cells[i]!++;
+      }
+    }
+  });
+
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text color="cyan" bold>context · token share by kind · Esc close</Text>
+      <Box marginTop={1}>
+        <Text>
+          {totals.map((t, i) => (
+            <Text key={t.key} backgroundColor={t.color}>
+              {" ".repeat(cells[i]!)}
+            </Text>
+          ))}
+        </Text>
+      </Box>
+      <Box flexDirection="column" marginTop={1}>
+        {totals.map((t) => (
+          <Text key={t.key}>
+            <Text color={t.color}>■ </Text>
+            <Text>{t.label.padEnd(8)}</Text>
+            <Text>{`${fmtInt(t.tokens)} tok`.padEnd(13)}</Text>
+            <Text dimColor>{`${Math.round((t.tokens / grand) * 100)}%`}</Text>
+          </Text>
+        ))}
+      </Box>
+      <Text dimColor>{`  total ~${fmtInt(grand)} tok · ${msgCount} messages`}</Text>
+    </Box>
+  );
+}
+
+/** /resume — pick a saved conversation to reopen. ↑/↓ navigate, Enter loads,
+ *  Esc / q cancel. Rows are newest-first: title · turns · model · when. */
+function ResumePanel({
+  onPick,
+  onClose,
+}: {
+  onPick: (conv: SavedConversation) => void;
+  onClose: () => void;
+}) {
+  const convs = useMemo(() => listConversations(), []);
+  const [idx, setIdxState] = useState(0);
+  const idxRef = useRef(0);
+  const setIdx = (i: number) => {
+    idxRef.current = i;
+    setIdxState(i);
+  };
+
+  useInput((input, key) => {
+    if (key.escape || input === "q") return onClose();
+    if (convs.length === 0) {
+      if (key.return) onClose();
+      return;
+    }
+    if (key.upArrow) return setIdx((idxRef.current - 1 + convs.length) % convs.length);
+    if (key.downArrow) return setIdx((idxRef.current + 1) % convs.length);
+    if (key.return) return onPick(convs[idxRef.current]!);
+  });
+
+  const row = (c: SavedConversation): string => {
+    const title = (c.title || "(untitled)").slice(0, 30).padEnd(31);
+    const turns = `${turnCount(c)} turn${turnCount(c) === 1 ? "" : "s"}`.padEnd(9);
+    const model = (c.model || "—").padEnd(18);
+    const when = c.updatedAt.slice(0, 16).replace("T", " ");
+    return `${title}${turns}${model}${when}`;
+  };
+
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text color="cyan" bold>
+        resume · ↑/↓ select · Enter open · Esc cancel
+      </Text>
+      {convs.length === 0 ? (
+        <Text dimColor>(no saved conversations yet — send a message, or run `npm run gen:mock`)</Text>
+      ) : (
+        <Text dimColor>{`  ${"title".padEnd(31)}${"turns".padEnd(9)}${"model".padEnd(18)}updated`}</Text>
+      )}
+      {convs.map((c, i) =>
+        i === idx ? (
+          <Text key={c.id} color="black" backgroundColor="cyan">{`▸ ${row(c)} `}</Text>
+        ) : (
+          <Text key={c.id}>{`  ${row(c)}`}</Text>
+        ),
+      )}
     </Box>
   );
 }
@@ -1137,16 +1518,30 @@ function App() {
 
   const idRef = useRef(0);
   const nextId = () => ++idRef.current;
+
+  // Persisted-conversation identity: null until the first real turn, then fixed
+  // for the session (or set to a loaded file's id on /resume) so autosave keeps
+  // rewriting the same document.
+  const convIdRef = useRef<string | null>(null);
+  const convCreatedRef = useRef<string>("");
+
   const onUsageRef = useRef<(u: UsageRecord) => void>(() => {});
+  const onAutoEvictRef = useRef<(names: string[], edits: AppliedEdits) => void>(() => {});
+  const onSkillInvokeRef = useRef<(name: string) => void>(() => {});
 
   const agentRef = useRef<SkillAgent | null>(null);
   if (!agentRef.current) {
     agentRef.current = new SkillAgent({
       skills,
       system: SYSTEM_PROMPT,
-      autoTriggers: false,
+      // Honor frontmatter triggers — `evict-after: used` clears a fat skill at the
+      // end of the turn that consumes it. Eviction is fully deterministic
+      // (frontmatter + human /clear-skill); the model has no eviction tool.
+      autoTriggers: true,
       thinking: false,
       onUsage: (u) => onUsageRef.current(u),
+      onAutoEvict: (names, edits) => onAutoEvictRef.current(names, edits),
+      onSkillInvoke: (name) => onSkillInvokeRef.current(name),
     });
   }
   const agent = agentRef.current;
@@ -1160,9 +1555,33 @@ function App() {
     setStats(computeStats(agent));
   }, [agent]);
 
+  // Mirror the transcript into a ref so the (memoized) /save handler can read the
+  // latest entries without being re-created on every keystroke.
+  const transcriptRef = useRef<Entry[]>([]);
+  useEffect(() => {
+    transcriptRef.current = transcript;
+  }, [transcript]);
+
   // Per-turn cache usage feeds the live header/bottom counters (and the /usage
   // panel reads agent.usageLog on demand) — no longer printed into the chat.
   onUsageRef.current = () => {
+    refreshStats();
+  };
+
+  // A deterministic `evict-after: used` eviction (fired at the next turn's
+  // start) gets a visible confirmation line so the auto-clear isn't silent.
+  onAutoEvictRef.current = (names, edits) => {
+    push(
+      "usage",
+      `auto-cleared ${names.join(", ")} (evict-after: used) · ~${edits.tokensFreed} tok freed · ${edits.tokensReprocessed} reprocessed`,
+    );
+    refreshStats();
+  };
+
+  // The model loaded a skill's full SKILL.md via invoke_skill — announce it like
+  // a human injection and refresh so its full-size block appears in the stack.
+  onSkillInvokeRef.current = (name) => {
+    push("skill", `${skillInvokeText(name)} · by agent`);
     refreshStats();
   };
 
@@ -1210,8 +1629,13 @@ function App() {
       const [cmd, ...rest] = withoutSlash.split(/\s+/);
 
       if (!KNOWN_COMMANDS.has(cmd!)) {
-        if (skills.some((s) => s.name === cmd)) push("system", agent.injectSkill(cmd!).message);
-        else push("system", `unknown command "${raw}" — try /help`);
+        if (skills.some((s) => s.name === cmd)) {
+          const r = agent.suggestSkill(cmd!);
+          if (r.ok) push("skill", skillSuggestText(cmd!));
+          else push("system", r.message);
+        } else {
+          push("system", `unknown command "${raw}" — try /help`);
+        }
         return false;
       }
 
@@ -1224,7 +1648,13 @@ function App() {
           break;
         case "use": {
           const name = rest[0];
-          push("system", name ? agent.injectSkill(name).message : "usage: /use <skill-name>");
+          if (!name) {
+            push("system", "usage: /use <skill-name>");
+            break;
+          }
+          const r = agent.suggestSkill(name);
+          if (r.ok) push("skill", skillSuggestText(name));
+          else push("system", r.message);
           break;
         }
         case "clear-skill": {
@@ -1247,6 +1677,43 @@ function App() {
           break;
         case "context":
           setOverlay("context");
+          break;
+        case "save": {
+          const t = transcriptRef.current;
+          if (!t.some((e) => e.kind === "user" || e.kind === "assistant")) {
+            push("system", "nothing to save yet — send a message first.");
+            break;
+          }
+          const name = rest.join(" ").trim();
+          if (name) {
+            convIdRef.current = slugify(name);
+            convCreatedRef.current ||= new Date().toISOString();
+          }
+          const id = convIdRef.current;
+          if (!id) {
+            push("system", "usage: /save <name>");
+            break;
+          }
+          convCreatedRef.current ||= new Date().toISOString();
+          const firstUser = t.find((e) => e.kind === "user");
+          saveConversation({
+            version: 1,
+            id,
+            title: name || firstUser?.text?.slice(0, 60) || "conversation",
+            model: MODEL,
+            createdAt: convCreatedRef.current,
+            updatedAt: new Date().toISOString(),
+            transcript: t,
+            agent: agent.snapshot(),
+          });
+          push(
+            "system",
+            `saved as "${id}" (${t.filter((e) => e.kind === "user").length} turns) — reopen with /resume.`,
+          );
+          break;
+        }
+        case "resume":
+          setOverlay("resume");
           break;
         case "quit":
         case "exit":
@@ -1283,32 +1750,40 @@ function App() {
         const name = tok.slice(1);
         if (skills.some((s) => s.name === name) && !seen.has(name)) {
           seen.add(name);
-          push("system", `${agent.injectSkill(name).message} (mentioned)`);
+          const r = agent.suggestSkill(name);
+          if (r.ok) push("skill", skillSuggestText(name, true));
+          else push("system", r.message);
         }
       }
 
-      // A live, growing assistant entry the stream writes into.
-      const assistantId = nextId();
-      setTranscript((prev) => [...prev, { id: assistantId, kind: "assistant", text: "" }]);
-      setScroll(0);
       setBusy(true);
 
-      const onDelta = (full: string) => {
-        setTranscript((prev) => prev.map((e) => (e.id === assistantId ? { ...e, text: full } : e)));
+      // The assistant entry is created lazily on the first text delta, so any
+      // mid-turn skill-invocation / tool lines land ABOVE the answer, not below.
+      let assistantId: number | null = null;
+      const writeAssistant = (text: string) => {
+        if (assistantId === null) {
+          const id = (assistantId = nextId());
+          setTranscript((prev) => [...prev, { id, kind: "assistant", text }]);
+        } else {
+          const id = assistantId;
+          setTranscript((prev) => prev.map((e) => (e.id === id ? { ...e, text } : e)));
+        }
         setScroll(0);
       };
 
       void (async () => {
-        const pending = agent.send(value, { onDelta });
+        const pending = agent.send(value, { onDelta: writeAssistant });
         refreshStats(); // the user message (+ any mentioned skills) are in context now
         try {
           const { text } = await pending;
-          setTranscript((prev) =>
-            prev.map((e) => (e.id === assistantId ? { ...e, text: text || "(no response)" } : e)),
-          );
+          writeAssistant(text || "(no response)");
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
-          setTranscript((prev) => prev.filter((e) => e.id !== assistantId));
+          if (assistantId !== null) {
+            const id = assistantId;
+            setTranscript((prev) => prev.filter((e) => e.id !== id));
+          }
           push("error", `API error: ${msg}\n  hint: set ANTHROPIC_API_KEY in .env or the environment.`);
         } finally {
           refreshStats();
@@ -1322,15 +1797,40 @@ function App() {
   const pickSkill = useCallback(
     (name: string) => {
       setPicker(false);
-      push("system", agent.injectSkill(name).message);
+      const r = agent.suggestSkill(name);
+      if (r.ok) push("skill", skillSuggestText(name));
+      else push("system", r.message);
       refreshStats();
     },
     [agent, push, refreshStats],
   );
 
+  // Reopen a saved conversation: rehydrate the agent and redraw the transcript.
+  const resumeConversation = useCallback(
+    (conv: SavedConversation) => {
+      agent.restore(conv.agent);
+      // Continue ids past the loaded transcript so new entries don't collide.
+      idRef.current = conv.transcript.reduce((m, e) => Math.max(m, e.id), 0);
+      convIdRef.current = conv.id;
+      convCreatedRef.current = conv.createdAt;
+      setTranscript(conv.transcript);
+      setScroll(0);
+      setOverlay(null);
+      refreshStats();
+    },
+    [agent, refreshStats],
+  );
+
   return (
     <Box width={columns} height={rows} flexDirection="column">
       <Header stats={stats} streaming={busy} width={columns} />
+
+      {/* Model badge — rounded orange box (like the header/input), pinned right. */}
+      <Box width={columns} flexShrink={0} paddingX={1} justifyContent="flex-end">
+        <Box borderStyle="round" borderColor={ORANGE} paddingX={1}>
+          <Text color={ORANGE} bold>{MODEL}</Text>
+        </Box>
+      </Box>
 
       {/* Scroll viewport — the only flexible region; clips overflow. */}
       <Box ref={viewportRef} flexGrow={1} flexDirection="column" justifyContent="flex-end" overflow="hidden" paddingX={1}>
@@ -1358,8 +1858,14 @@ function App() {
 
         {picker ? (
           <SkillsMenu onPick={pickSkill} onCancel={() => setPicker(false)} />
+        ) : overlay === "usage" ? (
+          <UsagePanel agent={agent} width={columns} rows={rows} onClose={() => setOverlay(null)} />
+        ) : overlay === "context" ? (
+          <ContextPanel agent={agent} width={columns} onClose={() => setOverlay(null)} />
+        ) : overlay === "resume" ? (
+          <ResumePanel onPick={resumeConversation} onClose={() => setOverlay(null)} />
         ) : overlay ? (
-          <InfoPanel kind={overlay} agent={agent} rows={rows} onClose={() => setOverlay(null)} />
+          <InfoPanel rows={rows} onClose={() => setOverlay(null)} />
         ) : busy ? (
           <Box borderStyle="round" borderColor="gray" paddingX={1}>
             <Spinner label="thinking…" />
