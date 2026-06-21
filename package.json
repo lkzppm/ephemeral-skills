@@ -7,6 +7,7 @@
   "scripts": {
     "start": "tsx cli/cli.tsx",
     "harness": "tsx cli/costHarness.ts",
+    "gen:mock": "tsx cli/genMockConversation.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
