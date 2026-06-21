@@ -5,8 +5,9 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "start": "tsx examples/cli.tsx",
-    "harness": "tsx examples/costHarness.ts",
+    "start": "tsx cli/cli.tsx",
+    "harness": "tsx cli/costHarness.ts",
+    "gen:mock": "tsx cli/genMockConversation.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

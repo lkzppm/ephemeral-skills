@@ -11,7 +11,7 @@
 | [concepts/eviction-triggers.md](concepts/eviction-triggers.md) | The three triggers; explicit `target` vs policy gate; when the cost gate is consulted | 380 |
 | [concepts/cache-correctness.md](concepts/cache-correctness.md) | Breakpoint after `P`; one write pass `ω·X`; `appliedEdits` accounting; the no-mutation rule | 430 |
 | [concepts/cache-relinking.md](concepts/cache-relinking.md) | A picture-first walkthrough of the KV-cache snip-and-rebuild; the per-turn `cache_read`/`cache_creation` trace; for showing the mechanism visually | 560 |
-| [concepts/showcase-cli.md](concepts/showcase-cli.md) | The `npm start` REPL demo; slash commands; deterministic injection; the live cache-usage panel | 360 |
+| [concepts/showcase-cli.md](concepts/showcase-cli.md) | The `npm start` REPL demo; slash commands; deterministic injection; streaming + Markdown-rendered replies; the two-row header with the live context-window visualizer and cache-usage panel | 430 |
 
 ## Canonical artifacts (source of truth — not under spec/)
 
@@ -19,7 +19,7 @@
 |---|---|---|
 | [../PRD.md](../PRD.md) | Requirements, design, API/frontmatter shape, edge cases, milestones, testing strategy | 1800 |
 | [../docs/cost-model.md](../docs/cost-model.md) | The prefix-cache economics; the `ρ·s·M > ω·X` decision rule and break-even `M*` | 920 |
-| [../PR_BODY.md](../PR_BODY.md) | Upstream framing + prior-art citations; the design promised to upstream | 900 |
+| [../ISSUE_COMMENT_BODY.md](../ISSUE_COMMENT_BODY.md) | Upstream framing + prior-art citations; the design promised to upstream | 900 |
 
 The [tasks/](tasks/) directory holds one spec per milestone (M1–M4), each with a
 `milestone:` frontmatter block (state + blocks/blockedBy). It's the entry point

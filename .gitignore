@@ -4,5 +4,6 @@ dist/
 .env
 .DS_Store
 coverage/
-examples/out/
+cli/out/
+conversations/
 *.csv
