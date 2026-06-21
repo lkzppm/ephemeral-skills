@@ -29,12 +29,13 @@ In:
   `evict-keep-tokens` from SKILL.md frontmatter into `SkillRecord` defaults.
 - Implement `estimateTail` (default: `remainingTokenBudget / avgStepTokens`,
   pluggable).
-- The **`clear_skill` model tool** (first-class): a tool definition + handler that
-  resolves a skill name to its `invocationId` and calls `clearSkillUses` with
-  `target` (never `force`).
-- Wire `evict-after: used` (evict at first request after output is consumed) and
-  the automatic token-threshold trigger into a reference loop that calls
-  `clearSkillUses` before each send and places the cache breakpoint after `P`.
+- The **`invoke_skill` model tool**: a tool definition + handler (in the loop) that
+  loads a skill's full SKILL.md body into context on demand (progressive
+  disclosure). Eviction is **not** a model tool — see
+  [eviction-triggers § Why eviction is not a model tool](../concepts/eviction-triggers.md).
+- Wire `evict-after: used` (evict deterministically at the end of the turn that
+  consumes the skill) and the automatic token-threshold trigger into a reference
+  loop that calls `clearSkillUses` and places the cache breakpoint after `P`.
 - Enforce the strict `ephemeral` gate (`force` only via the human `--force` path).
 
 Out:
@@ -43,8 +44,8 @@ Out:
 ## Acceptance Criteria
 
 - [ ] Frontmatter parses into side-table records; `ephemeral` defaults `false`.
-- [ ] `evict-after: used` fires exactly once, on the first request after the
-      skill's output is consumed.
+- [ ] `evict-after: used` fires exactly once, at the end of the turn that consumes
+      the skill (reprocess paid on the next request).
 - [ ] Threshold trigger evicts ephemeral skills oldest-first, respecting
       per-skill exclusion.
 - [ ] The loop imports the SDK; the core stays SDK-free (lint/grep check).
