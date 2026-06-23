@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clear_skill_uses — Lucas Pacheco</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300..900;1,8..60,300..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#000; --bg-elevated:#0a0a0a; --bg-subtle:#111;
+  --fg-50:#fafafa; --fg-100:#ededed; --fg-300:#d4d4d4; --fg-400:#a3a3a3;
+  --fg-500:#737373; --fg-600:#525252; --fg-700:#404040; --fg-800:#262626; --fg-900:#171717;
+  --accent:#0070f3; --accent-light:#3291ff; --accent-dark:#0050a3; --accent-glow:rgba(0,112,243,.30);
+  --claude:#c15f3c; --claude-light:#e07a55; --claude-glow:rgba(193,95,60,.30);
+  --warning:#febc2e; --warning-glow:rgba(254,188,46,.28);
+  --danger:#ff5f57; --danger-glow:rgba(255,95,87,.30);
+  --font-display:'Source Serif 4',Georgia,serif;
+  --font-mono:'JetBrains Mono','SF Mono',ui-monospace,monospace;
+  --ease:cubic-bezier(0.16,1,0.3,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:#000;color:var(--fg-100);font-family:var(--font-display);overflow:hidden;
+  -webkit-font-smoothing:antialiased;}
+::selection{background:rgba(0,112,243,.3);color:#fff}
+
+#viewport{position:fixed;inset:0;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden}
+#stage{width:1920px;height:1080px;position:relative;background:#000;transform-origin:center center;flex:none}
+
+.slide{position:absolute;inset:0;display:flex;flex-direction:column;
+  padding:88px 112px;opacity:0;visibility:hidden;pointer-events:none;
+  transition:opacity .6s var(--ease),visibility .6s var(--ease)}
+.slide.active{opacity:1;visibility:visible;pointer-events:auto}
+
+/* ── slide chrome ─────────────────────────────────────── */
+.kicker{display:flex;align-items:baseline;gap:20px;font-family:var(--font-mono)}
+.kicker .num{color:var(--accent);font-size:30px;letter-spacing:-.01em}
+.kicker .who{color:var(--fg-500);font-size:30px}
+.kicker .who b{color:var(--fg-200,#e5e5e5);font-weight:500}
+.title{font-family:var(--font-display);color:var(--fg-50);
+  font-weight:600;line-height:1.12;letter-spacing:-.02em}
+
+/* ── token row ────────────────────────────────────────── */
+.row-wrap{display:flex;align-items:flex-end;justify-content:center;gap:30px;
+  width:100%;}
+.chip{display:flex;flex-direction:column;align-items:center;gap:0;position:relative;
+  opacity:0;transform:translateY(26px);
+  transition:opacity .6s var(--ease),transform .6s var(--ease);
+  transition-delay:var(--d,0s)}
+.row-wrap.on .chip{opacity:1;transform:translateY(0)}
+.chip-box{position:relative;display:flex;align-items:center;justify-content:center;
+  border:1.5px solid var(--fg-700);background:var(--bg-elevated);
+  color:var(--fg-200,#e5e5e5);font-family:var(--font-mono);font-weight:500;
+  border-radius:8px;padding:0 26px;white-space:nowrap;
+  transition:all .55s var(--ease)}
+.chip-tok{font-family:var(--font-mono);font-size:24px;color:var(--fg-500);margin-top:14px;
+  transition:color .5s var(--ease)}
+.uline{height:5px;width:100%;border-radius:3px;margin-top:14px;opacity:0;
+  background:transparent;transition:opacity .5s var(--ease),background .5s var(--ease),box-shadow .5s var(--ease)}
+
+/* normal sizing */
+.chip-box{height:118px;font-size:32px}
+.chip[data-role="system"] .chip-box{min-width:172px}
+.chip[data-role="msg"] .chip-box{min-width:150px}
+
+/* skill chip — the big live one */
+.chip[data-role="skill"] .chip-box{height:178px;min-width:248px;font-size:34px;
+  border-color:var(--claude);color:var(--claude-light);
+  background:rgba(193,95,60,.10);box-shadow:0 0 30px var(--claude-glow),inset 0 0 0 1px rgba(193,95,60,.35)}
+.chip[data-role="skill"] .chip-tok{color:var(--claude-light)}
+.face-stub{display:none}
+
+/* cache states (applied to chip) */
+.chip.hot .uline{opacity:1;background:var(--accent);
+  box-shadow:0 0 20px var(--accent-glow),0 0 7px var(--accent)}
+.chip.rebuild .uline{opacity:1;height:0;border-bottom:5px dashed var(--warning);border-radius:0;
+  background:transparent;box-shadow:0 0 16px var(--warning-glow);
+  animation:dashmove .9s linear infinite}
+@keyframes dashmove{to{background-position:24px 0}}
+
+/* pulse-red (slide 1 step 3) */
+.chip.danger .chip-box{border-color:var(--danger);color:var(--danger);
+  background:rgba(255,95,87,.10)}
+.chip[data-role="skill"].danger .chip-box{border-color:var(--danger) !important;color:var(--danger) !important;
+  background:rgba(255,95,87,.12) !important;box-shadow:0 0 34px var(--danger-glow),inset 0 0 0 1px rgba(255,95,87,.4) !important}
+.chip[data-role="skill"].danger .chip-tok{color:var(--danger) !important}
+.chip.danger{animation:pulseRed 1.15s var(--ease) infinite}
+@keyframes pulseRed{
+  0%,100%{filter:drop-shadow(0 0 0 rgba(255,95,87,0))}
+  50%{filter:drop-shadow(0 0 26px rgba(255,95,87,.65))}
+}
+
+/* evicted stub */
+.chip.evicted{margin:0 16px}
+.chip.evicted .chip-box{height:84px !important;min-width:0 !important;width:auto;padding:0 36px;font-size:24px;
+  border-color:var(--fg-800);border-style:dashed;color:var(--fg-600);
+  background:#070707;box-shadow:none;opacity:.85}
+.chip.evicted .chip-tok{opacity:0}
+.chip.evicted .face-live{display:none}
+.chip.evicted .face-stub{display:inline}
+
+/* scissor cut marker */
+.cut{position:absolute;top:-58px;left:50%;transform:translateX(-50%) scale(.4);
+  color:var(--danger);font-size:46px;line-height:1;opacity:0;
+  transition:opacity .45s var(--ease),transform .45s var(--ease);
+  text-shadow:0 0 18px var(--danger-glow);pointer-events:none}
+.cut.on{opacity:1;transform:translateX(-50%) scale(1)}
+.cut .stem{position:absolute;top:46px;left:50%;width:2.5px;height:230px;
+  transform:translateX(-50%);
+  background:repeating-linear-gradient(180deg,var(--danger) 0 9px,transparent 9px 18px)}
+
+/* region brackets (P / tail) */
+.region{position:absolute;top:-30px;font-family:var(--font-mono);font-size:24px;
+  color:var(--fg-500);opacity:0;transition:opacity .5s var(--ease);
+  display:flex;flex-direction:column;align-items:center;gap:6px}
+.region.on{opacity:1}
+.region .bar{height:14px;border:1.5px solid var(--fg-700);border-bottom:none;width:100%}
+.region.p .bar{border-color:var(--accent);}
+.region.p span{color:var(--accent-light)}
+.region.tail .bar{border-color:var(--warning)}
+.region.tail span{color:var(--warning)}
+
+/* segment groups + brackets (slide 2) */
+.seg-group{position:relative;display:flex;align-items:flex-end}
+.seg-chips{display:flex;gap:30px;align-items:flex-end}
+.brk{position:absolute;left:0;right:0;top:-72px;display:flex;flex-direction:column;
+  align-items:center;gap:9px;opacity:0;transition:opacity .5s var(--ease)}
+.brk.on{opacity:1}
+.brk .lab{font-family:var(--font-mono);font-size:24px;letter-spacing:.01em;white-space:nowrap}
+.brk .line{width:100%;height:16px;border:2px solid var(--fg-600);
+  border-bottom:none;border-radius:5px 5px 0 0}
+.brk.p .line{border-color:var(--accent)}
+.brk.p .lab{color:var(--accent-light)}
+.brk.tail .line{border-color:var(--warning)}
+.brk.tail .lab{color:var(--warning)}
+
+/* symbol glossary */
+.glossbar{display:flex;justify-content:center;flex-wrap:wrap;gap:14px 48px;font-family:var(--font-mono)}
+.glossbar .gi{font-size:25px;color:var(--fg-400);display:flex;align-items:baseline;gap:12px}
+.glossbar .gi b{font-size:30px;font-weight:600}
+
+/* generic reveal */
+.rv{opacity:0;transform:translateY(18px);transition:opacity .55s var(--ease),transform .55s var(--ease)}
+.rv.on{opacity:1;transform:translateY(0)}
+
+/* annotation arrow / label */
+.anno{font-family:var(--font-mono);color:var(--fg-300);font-size:30px;display:flex;
+  align-items:center;gap:18px}
+.anno .ar{color:var(--claude-light);font-size:38px}
+
+/* cost badge */
+.cost{display:flex;flex-direction:column;gap:14px;align-items:center;
+  border:1.5px solid var(--danger);border-radius:10px;padding:26px 44px;
+  background:rgba(255,95,87,.07);box-shadow:0 0 30px var(--danger-glow)}
+.cost .turns{font-family:var(--font-mono);font-size:34px;color:var(--fg-400);letter-spacing:.04em}
+.cost .turns b{color:var(--danger);font-weight:600}
+.cost .total{font-family:var(--font-mono);font-size:50px;color:var(--danger);font-weight:600}
+.cost .cap{font-family:var(--font-mono);font-size:25px;color:var(--fg-500)}
+
+/* caption line */
+.caption{font-family:var(--font-mono);font-size:32px;color:var(--fg-300);line-height:1.4}
+.caption b{color:var(--accent-light);font-weight:600}
+
+/* ── decision rule ───────────────────────────────────── */
+.rule{font-family:var(--font-mono);font-weight:600;letter-spacing:-.01em;
+  color:var(--fg-50);font-size:62px;display:flex;align-items:center;gap:30px;justify-content:center}
+.rule .op{color:var(--accent)}
+.rule .gt{color:var(--warning)}
+.rule .lhs{color:var(--danger)}
+.rule .rhs{color:var(--warning)}
+.gloss{font-family:var(--font-mono);font-size:30px;color:var(--fg-400);text-align:center;line-height:1.5}
+.gloss b{color:var(--fg-100);font-weight:600}
+/* slide 3: compact decision-rule block so the chart is the main content */
+#s3rule{gap:6px !important;margin-bottom:48px !important}
+#s3rule .rule{font-size:38px;gap:18px}
+#s3rule .gloss{font-size:23px;max-width:none;white-space:nowrap;line-height:1.25}
+#s3rule .glossbar{gap:8px 40px}
+#s3rule .glossbar .gi{font-size:19px}
+#s3rule .glossbar .gi b{font-size:23px}
+
+/* footer */
+.footer{font-family:var(--font-mono);font-size:24px;color:var(--fg-600);
+  display:flex;align-items:center;gap:14px}
+.footer .acc{color:var(--accent)}
+
+/* ── step indicator ──────────────────────────────────── */
+#indicator{position:fixed;right:26px;bottom:22px;z-index:50;
+  font-family:var(--font-mono);font-size:18px;color:var(--fg-600);
+  background:rgba(10,10,10,.7);border:1px solid var(--fg-800);border-radius:6px;
+  padding:7px 13px;letter-spacing:.02em;backdrop-filter:blur(4px);
+  user-select:none}
+#indicator b{color:var(--accent)}
+#hint{position:fixed;left:26px;bottom:22px;z-index:50;
+  font-family:var(--font-mono);font-size:16px;color:var(--fg-700);user-select:none;
+  transition:opacity .6s var(--ease)}
+
+/* svg chart */
+.axis{stroke:var(--fg-800);stroke-width:1.5}
+.grid{stroke:var(--fg-900);stroke-width:1}
+.lbl{font-family:var(--font-mono);font-size:21px;fill:var(--fg-600)}
+.draw{stroke-dasharray:var(--len);stroke-dashoffset:var(--len);
+  transition:stroke-dashoffset 1.05s var(--ease)}
+.draw.on{stroke-dashoffset:0}
+</style>
+</head>
+<body>
+<div id="viewport">
+  <div id="stage">
+
+    <!-- ════════════ SLIDE 1 ════════════ -->
+    <section class="slide" data-slide="1" data-screen-label="01">
+      <div class="kicker"><span class="num">01</span><span class="who"><b>Lucas Pacheco</b> · clear_skill_uses</span></div>
+      <h1 class="title" style="font-size:62px;margin-top:30px;max-width:1560px">
+        algumas skills não deveriam viver na janela de contexto para sempre.
+      </h1>
+
+      <!-- center: token row -->
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:48px">
+        <div class="row-wrap" id="s1row">
+          <div class="chip" data-role="system" style="--d:0s"><div class="chip-box">system</div><div class="chip-tok">4k</div><div class="uline"></div></div>
+          <div class="chip" data-role="msg" style="--d:.07s"><div class="chip-box">você·1</div><div class="chip-tok">~300</div><div class="uline"></div></div>
+          <div class="chip" data-role="msg" style="--d:.14s"><div class="chip-box">IA·1</div><div class="chip-tok">~300</div><div class="uline"></div></div>
+          <div class="chip" data-role="skill" id="s1skill" style="--d:.21s">
+            <div class="chip-box"><span class="face-live">◆ SKILL.md</span><span class="face-stub">✗ skill</span></div>
+            <div class="chip-tok">2k</div><div class="uline"></div>
+          </div>
+          <div class="chip" data-role="msg" style="--d:.28s"><div class="chip-box">você·2</div><div class="chip-tok">~300</div><div class="uline"></div></div>
+          <div class="chip" data-role="msg" style="--d:.35s"><div class="chip-box">IA·2</div><div class="chip-tok">~300</div><div class="uline"></div></div>
+        </div>
+
+        <!-- annotation under skill -->
+        <div class="rv" id="s1anno" style="align-self:center">
+          <div class="anno"><span class="ar">↑</span><span>a skill é <b style="color:var(--claude-light)">carregada uma vez</b> para entregar conhecimento</span></div>
+        </div>
+      </div>
+
+      <!-- bottom band: takeaway (left) + running cost (right) — flex, no overlap -->
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:64px">
+        <div class="rv" id="s1tag" style="max-width:840px">
+          <p style="font-family:var(--font-mono);font-size:30px;color:var(--fg-400);line-height:1.5">
+            ela entregou o conhecimento — mas <b style="color:var(--danger)">fica ali, sendo paga, para sempre.</b></p>
+        </div>
+        <div class="rv" id="s1cost" style="flex:none">
+          <div class="cost">
+            <div class="turns">turno <b id="s1turn">2</b></div>
+            <div class="total" id="s1total">+8k</div>
+            <div class="cap">tokens pagos pela skill: +ρ·s a cada turno</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ════════════ SLIDE 2 ════════════ -->
+    <section class="slide" data-slide="2" data-screen-label="02">
+      <div class="kicker"><span class="num">02</span><span class="who">eviction + re-link do cache KV</span></div>
+      <h1 class="title" style="font-size:58px;margin-top:30px;max-width:1500px">
+        tirar S do prefixo — sem reprocessar o que veio antes.
+      </h1>
+
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:80px">
+        <div class="row-wrap" id="s2row" style="margin-top:78px">
+          <!-- prefix P group -->
+          <div class="seg-group">
+            <div class="brk p on"><span class="lab">prefixo P</span><span class="line"></span></div>
+            <div class="seg-chips">
+              <div class="chip" data-role="system" data-seg="p"><div class="chip-box">system</div><div class="chip-tok">4k</div><div class="uline"></div></div>
+              <div class="chip" data-role="msg" data-seg="p"><div class="chip-box">você·1</div><div class="chip-tok">~300</div><div class="uline"></div></div>
+              <div class="chip" data-role="msg" data-seg="p"><div class="chip-box">IA·1</div><div class="chip-tok">~300</div><div class="uline"></div></div>
+            </div>
+          </div>
+          <!-- skill (cut point) -->
+          <div class="chip" data-role="skill" data-seg="cut" id="s2skill">
+            <div class="cut" id="s2cut">✂<span class="stem"></span></div>
+            <div class="chip-box"><span class="face-live">◆ SKILL.md</span><span class="face-stub">✗ skill (evicted)</span></div>
+            <div class="chip-tok">2k</div><div class="uline"></div>
+          </div>
+          <!-- tail group -->
+          <div class="seg-group">
+            <div class="brk tail on"><span class="lab">cauda</span><span class="line"></span></div>
+            <div class="seg-chips">
+              <div class="chip" data-role="msg" data-seg="tail"><div class="chip-box">você·2</div><div class="chip-tok">~300</div><div class="uline"></div></div>
+              <div class="chip" data-role="msg" data-seg="tail"><div class="chip-box">IA·2</div><div class="chip-tok">~300</div><div class="uline"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- uline legend -->
+        <div style="align-self:center;display:flex;gap:60px;font-family:var(--font-mono);font-size:24px;color:var(--fg-300)">
+          <span style="display:flex;align-items:center;gap:14px">
+            <span style="width:48px;height:5px;border-radius:3px;background:var(--accent);box-shadow:0 0 12px var(--accent-glow);flex:none"></span>
+            blocos em cache (lidos a ρ)
+          </span>
+          <span style="display:flex;align-items:center;gap:14px">
+            <span style="width:48px;height:0;border-bottom:5px dashed var(--warning);flex:none"></span>
+            blocos que serão reprocessados (ω, uma vez)
+          </span>
+        </div>
+
+        <!-- label / caption stack -->
+        <div style="align-self:center;display:flex;flex-direction:column;align-items:center;gap:30px;min-height:130px;justify-content:flex-start">
+          <div class="caption" id="s2label" style="text-align:center"></div>
+          <div class="rv caption" id="s2caption" style="text-align:center;max-width:1380px">
+            <b style="color:var(--accent-light)">S saiu do prefixo de leitura</b> — todo turno seguinte fica <b style="color:var(--accent-light)">ρ·s mais barato.</b>
+          </div>
+        </div>
+      </div>
+
+      <!-- symbol glossary -->
+      <div class="glossbar" style="margin-bottom:46px">
+        <span class="gi"><b style="color:var(--accent-light)">ρ</b> custo de ler 1 token do cache · a cada turno</span>
+        <span class="gi"><b style="color:var(--warning)">ω</b> custo de reprocessar 1 token · uma vez</span>
+      </div>
+    </section>
+
+    <!-- ════════════ SLIDE 3 ════════════ -->
+    <section class="slide" data-slide="3" data-screen-label="03">
+      <div class="kicker"><span class="num">03</span><span class="who">o ganho — e quando vale a pena</span></div>
+      <h1 class="title" style="font-size:58px;margin-top:26px">cache_read: um degrau permanente para baixo.</h1>
+
+      <div style="display:flex;gap:64px;margin-top:14px;flex:1;min-height:0">
+        <!-- chart -->
+        <div style="flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0">
+          <svg viewBox="0 0 1060 470" style="width:100%;height:auto;max-height:720px">
+            <!-- grid -->
+            <line class="grid" x1="80" y1="120" x2="1010" y2="120"/>
+            <line class="grid" x1="80" y1="220" x2="1010" y2="220"/>
+            <line class="grid" x1="80" y1="320" x2="1010" y2="320"/>
+            <!-- axes -->
+            <line class="axis" x1="80" y1="40" x2="80" y2="400"/>
+            <line class="axis" x1="80" y1="400" x2="1010" y2="400"/>
+            <text class="lbl" x="80" y="28" text-anchor="start">cache_read</text>
+            <text class="lbl" x="58" y="406" text-anchor="end">0</text>
+            <text class="lbl" x="545" y="445" text-anchor="middle">turnos da conversa →</text>
+
+            <!-- savings shaded region (revealed step1) -->
+            <polygon id="s3save" class="rv" points="468,110 920,110 920,300 468,300" fill="rgba(0,112,243,.10)" stroke="none"/>
+
+            <!-- baseline: skill forever -->
+            <polyline id="s3base" class="draw" points="110,110 902,110" fill="none"
+              stroke="var(--danger)" stroke-width="5" stroke-linecap="round"/>
+            <text id="s3baselbl" class="rv" x="898" y="98" text-anchor="end"
+              style="font-family: var(--font-mono); font-size: 23px; fill: var(--danger)">a skill fica para sempre</text>
+
+            <!-- optimized line -->
+            <polyline id="s3opt" class="draw" points="110,110 198,110 286,110 374,68 462,300 550,300 638,300 726,300 814,300 902,300"
+              fill="none" stroke="var(--accent)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+            <!-- eviction spike marker -->
+            <circle id="s3spike" class="rv" cx="374" cy="68" r="8" fill="var(--warning)"/>
+            <text id="s3spikelbl" class="rv" x="374" y="48" text-anchor="middle"
+              style="font-family:var(--font-mono);font-size:21px;fill:var(--warning)">pico ω·X (rebuild único)</text>
+
+            <!-- savings arrow + label -->
+            <g id="s3savelbl" class="rv">
+              <line x1="694" y1="120" x2="694" y2="300" stroke="var(--accent-light)" stroke-width="2" stroke-dasharray="5 5"/>
+              <path d="M694,120 l-7,14 l14,0 z" fill="var(--accent-light)"/>
+              <path d="M694,300 l-7,-14 l14,0 z" fill="var(--accent-light)"/>
+              <text x="712" y="218" style="font-family:var(--font-mono);font-size:23px;fill:var(--accent-light)">ρ·s economizado</text>
+              <text x="712" y="246" style="font-family:var(--font-mono);font-size:23px;fill:var(--accent-light)">a cada turno</text>
+            </g>
+
+            <!-- final step: extend the chart to several skills — red climbs (kept), blue steps down (evicted) -->
+            <polyline id="s3basemulti" class="draw" points="110,220 240,220 300,170 470,170 530,120 700,120 760,72 980,72"
+              fill="none" stroke="var(--danger)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+            <polyline id="s3multi" class="draw" points="110,220 240,220 268,202 300,272 470,272 498,254 530,324 700,324 728,306 760,376 980,376"
+              fill="none" stroke="var(--accent)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+            <g id="s3multilbl" class="rv">
+              <circle cx="268" cy="202" r="7" fill="var(--warning)"/>
+              <circle cx="498" cy="254" r="7" fill="var(--warning)"/>
+              <circle cx="728" cy="306" r="7" fill="var(--warning)"/>
+              <text x="900" y="58" text-anchor="end" style="font-family:var(--font-mono);font-size:23px;fill:var(--danger)">sem eviction: cada skill nova fica ↑</text>
+              <text x="120" y="360" text-anchor="start" style="font-family:var(--font-mono);font-size:23px;fill:var(--accent-light)">cada eviction = +1 degrau permanente</text>
+              <text x="120" y="388" text-anchor="start" style="font-family:var(--font-mono);font-size:23px;fill:var(--accent-light)">contexto recuperado é cumulativo ↓</text>
+            </g>
+          </svg>
+        </div>
+
+        <!-- legend -->
+        <div style="width:330px;display:flex;flex-direction:column;justify-content:center;gap:32px">
+          <div style="display:flex;align-items:center;gap:18px">
+            <span style="width:42px;height:5px;background:var(--danger);border-radius:3px;flex:none"></span>
+            <span style="font-family:var(--font-mono);font-size:25px;color:var(--fg-300)">sem eviction</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:18px">
+            <span style="width:42px;height:5px;background:var(--accent);border-radius:3px;flex:none"></span>
+            <span style="font-family:var(--font-mono);font-size:25px;color:var(--fg-300)">com eviction</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- decision rule -->
+      <div class="rv" id="s3rule" style="display:flex;flex-direction:column;align-items:center;gap:16px;margin-bottom:8px">
+        <div class="rule">
+          <span class="lhs">evict</span>
+          <span class="op">⟺</span>
+          <span class="lhs">ρ·s·M</span>
+          <span class="gt">&gt;</span>
+          <span class="rhs">ω·X</span>
+        </div>
+        <div class="gloss" style="max-width:none;white-space:nowrap">evicte skills <b>grandes (s)</b>, de <b>vida longa (M)</b>, com uma <b>banda de uso pequena (X)</b>.</div>
+        <div class="glossbar" style="margin-top:2px">
+          <span class="gi"><b style="color:var(--accent-light)">ρ</b> ler 1 token do cache · por turno</span>
+          <span class="gi"><b style="color:var(--warning)">ω</b> reprocessar 1 token · uma vez</span>
+        </div>
+      </div>
+
+      <div class="footer" style="flex-direction:row;align-items:baseline;gap:16px;margin-top:auto;padding-right:340px">
+        <span class="acc" style="font-size:26px">github.com/lkzppm/ephemeral-skills</span>
+        <span style="color:var(--fg-700,#555)">·</span>
+        <span>implementação de referência + RFC para o Claude Code</span>
+      </div>
+
+    </section>
+
+  </div>
+</div>
+
+<div id="indicator"><b id="ind-slide">1</b> · passo <b id="ind-step">1</b>/<span id="ind-total">3</span></div>
+<div id="hint">→ / espaço avança · ← volta · 1·2·3 pula · F tela cheia</div>
+
+<script>
+(function(){
+  "use strict";
+  var stage=document.getElementById('stage'),viewport=document.getElementById('viewport');
+  var slidesEls=[].slice.call(document.querySelectorAll('.slide'));
+
+  function fit(){
+    var s=Math.min(viewport.clientWidth/1920, viewport.clientHeight/1080);
+    stage.style.transform='scale('+s+')';
+  }
+  window.addEventListener('resize',fit); fit();
+
+  // ── step model ────────────────────────────────────────
+  var STEPS=[3,3,4];           // steps per slide
+  var cur=0, step=0, s1timer=null;
+
+  function clearTimers(){ if(s1timer){clearInterval(s1timer);s1timer=null;} }
+
+  function on(el,c){ if(el) el.classList.toggle('on',!!c); }
+  function cls(el,name,v){ if(el) el.classList.toggle(name,!!v); }
+
+  // ── SLIDE 1 ───────────────────────────────────────────
+  function renderS1(st){
+    on(document.getElementById('s1row'),true);          // row always present
+    on(document.getElementById('s1anno'), st>=1);
+    var live = st>=2;
+    on(document.getElementById('s1cost'), live);
+    on(document.getElementById('s1tag'), live);
+    cls(document.getElementById('s1skill'),'danger', live);
+    if(live) startS1Counter();
+  }
+  function startS1Counter(){
+    clearTimers();
+    var turn=2, total=8;                                  // skill 2k? show cumulative ×4 at turn... start 8k
+    var tEl=document.getElementById('s1turn'), totEl=document.getElementById('s1total');
+    tEl.textContent=turn; totEl.textContent='+'+total+'k';
+    s1timer=setInterval(function(){
+      if(turn>=12){return;}
+      turn++; total+=2;
+      tEl.textContent=turn; totEl.textContent='+'+total+'k';
+    },820);
+  }
+
+  // ── SLIDE 2 ───────────────────────────────────────────
+  function renderS2(st){
+    on(document.getElementById('s2row'),true);
+    var chips=[].slice.call(document.querySelectorAll('#s2row .chip'));
+    var label=document.getElementById('s2label');
+    var evicted = st>=1;
+    cls(document.getElementById('s2skill'),'evicted', evicted);
+    on(document.getElementById('s2cut'), evicted);
+    on(document.getElementById('s2caption'), st>=2);
+
+    chips.forEach(function(c){
+      var seg=c.getAttribute('data-seg');
+      c.classList.remove('hot','rebuild');
+      if(seg==='cut') return;                              // skill: no underline
+      if(st===0){ c.classList.add('hot'); }                // steady state — all cached
+      else if(st===1){                                     // eviction + tail reprocess (same instant)
+        if(seg==='p') c.classList.add('hot');              // P stays hot
+        else if(seg==='tail') c.classList.add('rebuild');  // tail reprocessing (yellow dashed)
+      } else {
+        c.classList.add('hot');                            // tail re-cached → all hot
+      }
+    });
+
+    var labels=[
+      'prefixo P (quente) \u2014\u25B6 skill S \u2014\u25B6 cauda',
+      'eviction: S vira stub e a cauda reprocessa uma vez (\u03C9·X) \u2014 P intacto',
+      'cadeia quente mais curta:  [P] \u2014\u25B6 [stub] \u2014\u25B6 [cauda]'
+    ];
+    label.innerHTML=labels[Math.min(st,2)];
+  }
+
+  // ── SLIDE 3 ───────────────────────────────────────────
+  function setLen(id){
+    var el=document.getElementById(id); if(!el) return;
+    try{ var L=el.getTotalLength(); el.style.setProperty('--len',L); }catch(e){}
+  }
+  function renderS3(st){
+    setLen('s3base'); setLen('s3opt'); setLen('s3multi'); setLen('s3basemulti');
+    var fin = st>=3;
+    on(document.getElementById('s3base'), st>=0 && !fin);
+    on(document.getElementById('s3baselbl'), st>=0 && !fin);
+    var single = st>=1 && !fin;                   // single-eviction view (steps 2–3)
+    on(document.getElementById('s3opt'), single);
+    on(document.getElementById('s3save'), single);
+    on(document.getElementById('s3spike'), single);
+    on(document.getElementById('s3spikelbl'), single);
+    on(document.getElementById('s3savelbl'), single);
+    on(document.getElementById('s3rule'), st>=2);
+    // final step: extend the same chart to several skills (red climbs ↑ / blue steps down ↓)
+    on(document.getElementById('s3basemulti'), fin);
+    on(document.getElementById('s3multi'), fin);
+    on(document.getElementById('s3multilbl'), fin);
+  }
+
+  var RENDER=[renderS1,renderS2,renderS3];
+
+  function render(){
+    clearTimers();
+    slidesEls.forEach(function(el,i){ el.classList.toggle('active', i===cur); });
+    RENDER[cur](step);
+    document.getElementById('ind-slide').textContent=cur+1;
+    document.getElementById('ind-step').textContent=step+1;
+    document.getElementById('ind-total').textContent=STEPS[cur];
+    var h=document.getElementById('hint');
+    h.style.opacity = (cur===0&&step===0)?'1':'0';
+  }
+
+  function advance(){
+    if(step < STEPS[cur]-1){ step++; }
+    else if(cur < STEPS.length-1){ cur++; step=0; }
+    else return;
+    render();
+  }
+  function back(){
+    if(step>0){ step--; }
+    else if(cur>0){ cur--; step=STEPS[cur]-1; }
+    else return;
+    render();
+  }
+  function jump(i){ if(i>=0&&i<STEPS.length){ cur=i; step=0; render(); } }
+
+  document.addEventListener('keydown',function(e){
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'||e.key==='Spacebar'){ e.preventDefault(); advance(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); back(); }
+    else if(e.key==='1'){ jump(0); }
+    else if(e.key==='2'){ jump(1); }
+    else if(e.key==='3'){ jump(2); }
+    else if(e.key==='f'||e.key==='F'){
+      if(!document.fullscreenElement){ document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen(); }
+      else { document.exitFullscreen&&document.exitFullscreen(); }
+    }
+    else if(e.key==='Home'){ jump(0); }
+  });
+
+  viewport.addEventListener('click',function(e){
+    if(e.target.closest('a')) return;
+    advance();
+  });
+
+  document.addEventListener('fullscreenchange',fit);
+  setTimeout(function(){ setLen('s3base'); setLen('s3opt'); render(); },60);
+  render();
+})();
+</script>
+</body>
+</html>

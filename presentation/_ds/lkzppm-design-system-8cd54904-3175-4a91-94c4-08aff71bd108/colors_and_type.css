@@ -1,0 +1,325 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   LKZPPM DESIGN SYSTEM — colors_and_type.css
+   ─────────────────────────────────────────────────────────────────────────
+   Foundation tokens for Lucas Pacheco's portfolio brand.
+   Dark, editorial, terminal-first. Built around serif body + mono accent.
+
+   Fonts:
+   - Tiempos Text (commercial, license required) → fallback: Source Serif 4
+   - JetBrains Mono (Google Fonts, MIT)
+
+   Note: Tiempos Text is a paid font from Klim Type Foundry. We substitute
+   with Source Serif 4 (Adobe, open source) which has nearly identical
+   editorial proportions and contrast. Swap back in production.
+   ───────────────────────────────────────────────────────────────────────── */
+
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300..900;1,8..60,300..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap');
+
+:root {
+  /* ─── COLOR — Background & surfaces ─────────────────────────────────── */
+  --bg:               #000000;     /* page background, true black */
+  --bg-elevated:      #0a0a0a;     /* cards, modals, raised surfaces */
+  --bg-subtle:        #111111;     /* hover wash, alt rows */
+  --bg-overlay:       rgba(0, 0, 0, 0.85); /* modal scrim */
+
+  /* ─── COLOR — Foreground (neutrals scale) ───────────────────────────── */
+  --fg-50:            #fafafa;     /* near-white */
+  --fg-100:           #ededed;     /* default body text */
+  --fg-200:           #e5e5e5;
+  --fg-300:           #d4d4d4;     /* secondary text */
+  --fg-400:           #a3a3a3;     /* tertiary text, muted body */
+  --fg-500:           #737373;     /* labels, captions */
+  --fg-600:           #525252;     /* very muted, dividers as text */
+  --fg-700:           #404040;     /* hint text */
+  --fg-800:           #262626;     /* borders, dividers */
+  --fg-900:           #171717;     /* deepest stroke */
+  --fg-950:           #0a0a0a;     /* near-black */
+
+  /* Semantic aliases */
+  --fg:               var(--fg-100);
+  --fg-muted:         var(--fg-400);
+  --fg-subtle:        var(--fg-500);
+  --fg-faint:         var(--fg-700);
+
+  /* ─── COLOR — Accents ───────────────────────────────────────────────── */
+  /* Primary: Vercel-style blue — the "terminal" mode color */
+  --accent:           #0070f3;
+  --accent-dark:      #0050a3;
+  --accent-light:     #3291ff;
+  --accent-glow:      rgba(0, 112, 243, 0.25);
+
+  /* Secondary: Claude orange — used sparingly for "AI" mode and badges */
+  --claude:           #c15f3c;
+  --claude-light:     #e07a55;
+  --claude-glow:      rgba(193, 95, 60, 0.25);
+
+  /* ─── COLOR — Semantic status ───────────────────────────────────────── */
+  --success:          #4ade80;     /* "Open to opportunities" pulse */
+  --warning:          #febc2e;     /* macOS yellow */
+  --danger:           #ff5f57;     /* macOS red */
+
+  /* ─── COLOR — Selection & focus ─────────────────────────────────────── */
+  --selection-bg:     rgba(0, 112, 243, 0.3);
+  --selection-fg:     #ffffff;
+  --focus-ring:       var(--accent);
+
+  /* ─── COLOR — Code highlight (terminal/code blocks) ─────────────────── */
+  --code-keyword:     #ff79c6;
+  --code-string:      #50fa7b;
+  --code-comment:     #6272a4;
+  --code-function:    var(--accent);
+
+  /* ─── TYPE — Families ───────────────────────────────────────────────── */
+  /* Editorial serif is the brand voice. Mono is the technical voice. */
+  --font-display:     'Source Serif 4', 'Tiempos Text', Georgia, 'Times New Roman', serif;
+  --font-body:        'Source Serif 4', 'Tiempos Text', Georgia, 'Times New Roman', serif;
+  --font-mono:        'JetBrains Mono', 'SF Mono', 'Fira Code', ui-monospace, monospace;
+
+  /* ─── TYPE — Scale (modular, 1.25 ratio anchored at 16px) ───────────── */
+  --text-xs:          0.75rem;     /* 12px — micro labels */
+  --text-sm:          0.875rem;    /* 14px — mono section numbers, captions */
+  --text-base:        1rem;        /* 16px — body */
+  --text-lg:          1.125rem;    /* 18px — large body */
+  --text-xl:          1.25rem;     /* 20px — h4, callout */
+  --text-2xl:         1.5rem;      /* 24px — h3 */
+  --text-3xl:         1.875rem;    /* 30px — h3 large */
+  --text-4xl:         2.25rem;     /* 36px — h2 */
+  --text-5xl:         3rem;        /* 48px — h2 large, hero secondary */
+  --text-6xl:         3.75rem;     /* 60px — display, hero headline */
+  --text-7xl:         4.5rem;      /* 72px — landing hero */
+
+  /* ─── TYPE — Weights ────────────────────────────────────────────────── */
+  --weight-light:     300;
+  --weight-regular:   400;
+  --weight-medium:    500;
+  --weight-semibold:  600;
+  --weight-bold:      700;
+
+  /* ─── TYPE — Leading ────────────────────────────────────────────────── */
+  --leading-tight:    1.1;
+  --leading-snug:     1.25;
+  --leading-normal:   1.5;
+  --leading-relaxed:  1.7;
+  --leading-loose:    1.9;
+
+  /* ─── TYPE — Tracking ───────────────────────────────────────────────── */
+  --tracking-tight:   -0.025em;
+  --tracking-normal:  0;
+  --tracking-wide:    0.025em;
+  --tracking-wider:   0.05em;
+  --tracking-mono:    -0.01em;
+
+  /* ─── SPACING — 4px base scale ──────────────────────────────────────── */
+  --space-0:          0;
+  --space-1:          0.25rem;     /* 4 */
+  --space-2:          0.5rem;      /* 8 */
+  --space-3:          0.75rem;     /* 12 */
+  --space-4:          1rem;        /* 16 */
+  --space-5:          1.25rem;     /* 20 */
+  --space-6:          1.5rem;      /* 24 */
+  --space-8:          2rem;        /* 32 */
+  --space-10:         2.5rem;      /* 40 */
+  --space-12:         3rem;        /* 48 */
+  --space-16:         4rem;        /* 64 — section padding mobile */
+  --space-20:         5rem;        /* 80 */
+  --space-24:         6rem;        /* 96 */
+  --space-32:         8rem;        /* 128 — section padding desktop */
+
+  /* Editorial layout padding (matches Tailwind p-8 md:p-16 pattern) */
+  --section-padding-y: var(--space-16);
+  --section-padding-x: var(--space-16);
+
+  /* ─── RADIUS ────────────────────────────────────────────────────────── */
+  /* Restrained: prefer sharp/square; rounding is for chips & pills only. */
+  --radius-none:      0;
+  --radius-sm:        0.125rem;    /* 2  — tight tags */
+  --radius:           0.375rem;    /* 6  — buttons, inputs, mode pills */
+  --radius-md:        0.5rem;      /* 8  — cards, code blocks */
+  --radius-lg:        0.75rem;     /* 12 — modals */
+  --radius-xl:        1rem;        /* 16 — large modals */
+  --radius-full:      9999px;      /* pills, traffic lights, status dots */
+
+  /* ─── BORDERS ───────────────────────────────────────────────────────── */
+  --border-width:     1px;
+  --border-color:     var(--fg-800);          /* default hairline */
+  --border-color-subtle: rgba(38, 38, 38, 0.6); /* gray-800 / 60 */
+  --border-color-accent: rgba(0, 112, 243, 0.4);
+
+  /* ─── SHADOWS ───────────────────────────────────────────────────────── */
+  /* On pure black backgrounds, glows do more work than drop shadows. */
+  --shadow-sm:        0 1px 2px 0 rgba(0, 0, 0, 0.4);
+  --shadow:           0 4px 12px 0 rgba(0, 0, 0, 0.5);
+  --shadow-lg:        0 16px 40px 0 rgba(0, 0, 0, 0.6);
+  --shadow-glow:      0 0 24px var(--accent-glow);
+  --shadow-glow-claude: 0 0 24px var(--claude-glow);
+  --shadow-inset:     inset 0 0 0 1px var(--border-color);
+
+  /* ─── MOTION ────────────────────────────────────────────────────────── */
+  /* Editorial easing: slow-in, hard-out. Matches framer-motion config. */
+  --ease-out:         cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out:      cubic-bezier(0.65, 0, 0.35, 1);
+  --duration-fast:    150ms;
+  --duration:         300ms;
+  --duration-slow:    700ms;
+  --duration-slower:  900ms;       /* section reveal default */
+
+  /* ─── LAYOUT ────────────────────────────────────────────────────────── */
+  --container-max:    1440px;
+  --navbar-height:    4rem;        /* 64px — h-16 */
+  --hero-height:      100dvh;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   BASE ELEMENTS — semantic mappings of the tokens above.
+   Use these classes/elements rather than restating tokens.
+   ───────────────────────────────────────────────────────────────────────── */
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--bg);
+}
+
+body {
+  margin: 0;
+  color: var(--fg);
+  background: var(--bg);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  font-weight: var(--weight-regular);
+}
+
+/* ── Headings — editorial serif, large, low-weight ───────────────────── */
+h1, .h1 {
+  font-family: var(--font-display);
+  font-size: var(--text-6xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg-50);
+  margin: 0;
+}
+
+h2, .h2 {
+  font-family: var(--font-display);
+  font-size: var(--text-5xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg-100);
+  margin: 0;
+}
+
+h3, .h3 {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-snug);
+  color: var(--fg-100);
+  margin: 0;
+}
+
+h4, .h4 {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-snug);
+  color: var(--fg-100);
+  margin: 0;
+}
+
+p, .p {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-relaxed);
+  color: var(--fg-300);
+  margin: 0;
+}
+
+.p-lead {
+  font-size: var(--text-2xl);
+  line-height: var(--leading-relaxed);
+  font-weight: var(--weight-light);
+  color: var(--fg-300);
+}
+
+.p-muted {
+  color: var(--fg-500);
+}
+
+.p-faint {
+  color: var(--fg-700);
+}
+
+/* ── Mono — the technical voice ──────────────────────────────────────── */
+code, kbd, samp, pre, .mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  letter-spacing: var(--tracking-mono);
+}
+
+/* Mono "section number" tag (e.g. 01, 02) */
+.mono-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--accent);
+  letter-spacing: var(--tracking-mono);
+}
+
+/* Mono caption — used for orgs, timestamps, paths */
+.mono-caption {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--fg-500);
+}
+
+/* Terminal prompt prefix */
+.prompt::before {
+  content: '❯ ';
+  color: var(--accent);
+}
+
+/* ── Links ───────────────────────────────────────────────────────────── */
+a {
+  color: var(--fg-100);
+  text-decoration: none;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+a:hover {
+  color: var(--accent);
+}
+
+/* ── Selection & focus ───────────────────────────────────────────────── */
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-subtle); }
+::-webkit-scrollbar-thumb { background: var(--fg-800); border-radius: var(--radius); }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-700); }
+
+/* ── Common patterns ─────────────────────────────────────────────────── */
+.hairline-top    { border-top: var(--border-width) solid var(--border-color); }
+.hairline-bottom { border-bottom: var(--border-width) solid var(--border-color); }
+.hairline-right  { border-right: var(--border-width) solid var(--border-color); }
+
+.section {
+  padding: var(--section-padding-y) var(--section-padding-x);
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
